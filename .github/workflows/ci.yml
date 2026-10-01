@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.9"
+
+      - name: Shell syntax
+        run: bash -n ralph.sh scripts/*.sh
+
+      - name: Python tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: flowchart/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm ci --ignore-scripts
+        working-directory: flowchart
+
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=high
+        working-directory: flowchart
+
+      - name: Lint flowchart
+        run: npm run lint
+        working-directory: flowchart
+
+      - name: Build flowchart for fork path
+        run: npm run build
+        working-directory: flowchart
+        env:
+          VITE_BASE_PATH: /ralph-wiggum/
+
+      - name: Build confined runtime images
+        run: |
+          docker build --tag ralph-validator:1.0.0 docker/validator
+          docker build --tag ralph-codex-provider:0.145.0 docker/codex-provider
