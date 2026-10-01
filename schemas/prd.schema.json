@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hardened Ralph PRD",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["project", "description", "userStories"],
+  "properties": {
+    "project": {"type": "string", "minLength": 1},
+    "description": {"type": "string", "minLength": 1},
+    "userStories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "title",
+          "description",
+          "acceptanceCriteria",
+          "priority",
+          "allowedPaths",
+          "requiredChecks"
+        ],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1},
+          "acceptanceCriteria": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "priority": {"type": "integer", "minimum": 1},
+          "allowedPaths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "requiredChecks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "dependsOn": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "requiresBrowser": {"type": "boolean"},
+          "references": {
+            "type": "array",
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "passes": {
+            "description": "Legacy migration field. The orchestrator ignores this value.",
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

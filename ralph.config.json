@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "protectedPaths": [
+    ".git/**",
+    ".github/workflows/**",
+    ".ralph/**",
+    "ralph-state/**"
+  ],
+  "checks": {
+    "python-tests": {
+      "argv": ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+      "timeoutSeconds": 120,
+      "containerImage": "ralph-validator:1.0.0",
+      "immutablePaths": ["tests/**"]
+    },
+    "shell-syntax": {
+      "argv": ["bash", "-n", "ralph.sh"],
+      "timeoutSeconds": 30,
+      "containerImage": "ralph-validator:1.0.0"
+    },
+    "flowchart-install": {
+      "argv": ["npm", "--prefix", "flowchart", "ci", "--ignore-scripts"],
+      "timeoutSeconds": 180,
+      "containerImage": "ralph-validator:1.0.0",
+      "network": true,
+      "scratchMounts": {"flowchart/node_modules": "rw"},
+      "immutablePaths": ["flowchart/package.json", "flowchart/package-lock.json"]
+    },
+    "flowchart-lint": {
+      "argv": ["npm", "--prefix", "flowchart", "run", "lint"],
+      "timeoutSeconds": 120,
+      "containerImage": "ralph-validator:1.0.0",
+      "scratchMounts": {"flowchart/node_modules": "ro"},
+      "immutablePaths": ["flowchart/eslint.config.js", "flowchart/package.json", "flowchart/package-lock.json"]
+    },
+    "flowchart-build": {
+      "argv": ["npm", "--prefix", "flowchart", "run", "build"],
+      "timeoutSeconds": 180,
+      "containerImage": "ralph-validator:1.0.0",
+      "environment": {"VITE_BASE_PATH": "/ralph-wiggum/"},
+      "scratchMounts": {
+        "flowchart/node_modules": "rw",
+        "flowchart/dist": "rw"
+      },
+      "immutablePaths": ["flowchart/package.json", "flowchart/package-lock.json", "flowchart/tsconfig*.json"]
+    }
+  }
+}

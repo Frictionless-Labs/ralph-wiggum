@@ -2,6 +2,9 @@
 prd.json
 progress.txt
 .last-branch
+.ralph-state/
+__pycache__/
+*.py[cod]
 
 # Archive is optional to commit
 # archive/
