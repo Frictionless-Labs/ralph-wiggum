@@ -103,6 +103,8 @@ def load_prd(path: Path, config: RalphConfig, content: bytes | None = None) -> P
         if not isinstance(item, dict):
             raise PreflightError(f"story at index {index} must be an object")
         story_id = _required_string(item, "id", f"story at index {index}")
+        if any(ord(character) < 32 or ord(character) == 127 for character in story_id):
+            raise PreflightError(f"story at index {index} id contains control characters")
         if story_id in seen:
             raise PreflightError(f"duplicate story id: {story_id}")
         seen.add(story_id)

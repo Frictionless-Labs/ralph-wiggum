@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ class RunOptions:
     max_attempts: int
     timeout_seconds: float
     browser_evidence: Optional[Path]
+    resume_run: Optional[Path] = None
 
 
 def _git_text(repo: Path, *args: str) -> str:
@@ -214,7 +216,16 @@ class Orchestrator:
 
     def _preflight(
         self,
-    ) -> tuple[Path, str, Any, Any, bytes, bytes, dict[str, tuple[dict[str, str], ...]]]:
+    ) -> tuple[
+        Path,
+        str,
+        Any,
+        Any,
+        bytes,
+        bytes,
+        dict[str, tuple[dict[str, str], ...]],
+        Optional[RunStore],
+    ]:
         if self.options.max_iterations <= 0 or self.options.max_attempts <= 0:
             raise PreflightError("iteration and attempt ceilings must be positive")
         if not math.isfinite(self.options.timeout_seconds) or self.options.timeout_seconds <= 0:
@@ -224,16 +235,35 @@ class Orchestrator:
             raise PreflightError(f"repository directory not found: {repo}")
         if Path(_git_text(repo, "rev-parse", "--show-toplevel")).resolve() != repo:
             raise PreflightError(f"repo must be its Git root: {repo}")
-        source_head = _git_text(repo, "rev-parse", "HEAD")
-        state_dir = self.options.state_dir.expanduser().resolve()
+        resume_store = None
+        if self.options.resume_run is not None:
+            requested_run = Path(os.path.abspath(self.options.resume_run.expanduser()))
+            if requested_run.is_symlink():
+                raise PreflightError(f"resume run must be a real directory: {requested_run}")
+            try:
+                resume_store = RunStore.load(requested_run)
+            except (OSError, StateError) as exc:
+                raise PreflightError(f"unable to load resumable run: {exc}") from exc
+            if (
+                resume_store.state.get("status") != "BLOCKED"
+                or resume_store.state.get("reason") != "BLOCKED_VERIFIER"
+            ):
+                raise PreflightError("only a BLOCKED_VERIFIER run may be resumed")
+            source_head = str(resume_store.state["sourceHead"])
+            _git_text(repo, "cat-file", "-e", f"{source_head}^{{commit}}")
+            config_path = resume_store.config_snapshot_path
+            prd_path = resume_store.snapshot_path
+        else:
+            source_head = _git_text(repo, "rev-parse", "HEAD")
+            config_path = self.options.config_path.expanduser().resolve()
+            prd_path = self.options.prd_path.expanduser().resolve()
+        state_dir = Path(os.path.abspath(self.options.state_dir.expanduser()))
         try:
-            state_dir.relative_to(repo)
+            state_dir.resolve().relative_to(repo)
         except ValueError:
             pass
         else:
             raise PreflightError("state directory must be outside the source repository")
-        config_path = self.options.config_path.expanduser().resolve()
-        prd_path = self.options.prd_path.expanduser().resolve()
         try:
             config_bytes = config_path.read_bytes()
             prd_bytes = prd_path.read_bytes()
@@ -248,7 +278,24 @@ class Orchestrator:
             for story in prd.stories
         }
         safe_path = build_safe_env().get("PATH", "")
-        required_check_ids = {check for story in prd.stories for check in story.required_checks}
+        execution_required = resume_store is None or any(
+            story_state.get("status") == "PENDING"
+            for story_state in resume_store.state["stories"].values()
+        )
+        stories_requiring_execution = (
+            prd.stories
+            if resume_store is None
+            else tuple(
+                story
+                for story in prd.stories
+                if resume_store.state["stories"][story.id].get("status") == "PENDING"
+            )
+        )
+        required_check_ids = {
+            check
+            for story in stories_requiring_execution
+            for check in story.required_checks
+        }
         resolved_checks = dict(config.checks)
         for check_id in sorted(required_check_ids):
             definition = config.checks[check_id]
@@ -302,7 +349,7 @@ class Orchestrator:
             if not available:
                 raise PreflightError(f"check executable unavailable: {executable}")
         config = replace(config, checks=resolved_checks)
-        if isinstance(self.provider, CommandProvider):
+        if isinstance(self.provider, CommandProvider) and execution_required:
             executable = self.provider.argv[0]
             if shutil.which(executable, path=safe_path) is None:
                 raise PreflightError(f"provider executable unavailable: {executable}")
@@ -311,37 +358,179 @@ class Orchestrator:
                 raise PreflightError(provider_preflight_error)
         if not _git_text(repo, "config", "user.name") or not _git_text(repo, "config", "user.email"):
             raise PreflightError("Git commit user.name and user.email are required")
-        return repo, source_head, config, prd, config_bytes, prd_bytes, references
+        return (
+            repo,
+            source_head,
+            config,
+            prd,
+            config_bytes,
+            prd_bytes,
+            references,
+            resume_store,
+        )
 
     def run(self) -> OrchestrationResult:
-        repo, source_head, config, prd, config_bytes, prd_bytes, references = self._preflight()
-        try:
-            store = RunStore.create(
-                self.options.state_dir,
-                prd.path,
-                source_head,
-                [story.id for story in prd.stories],
-                config_path=config.path,
-                prd_bytes=prd_bytes,
-                config_bytes=config_bytes,
-            )
-        except (OSError, StateError) as exc:
-            raise PreflightError(f"unable to initialize run state: {exc}") from exc
+        (
+            repo,
+            source_head,
+            config,
+            prd,
+            config_bytes,
+            prd_bytes,
+            references,
+            resume_store,
+        ) = self._preflight()
+        if resume_store is None:
+            try:
+                store = RunStore.create(
+                    self.options.state_dir,
+                    prd.path,
+                    source_head,
+                    [story.id for story in prd.stories],
+                    config_path=config.path,
+                    prd_bytes=prd_bytes,
+                    config_bytes=config_bytes,
+                )
+            except (OSError, StateError) as exc:
+                raise PreflightError(f"unable to initialize run state: {exc}") from exc
+            try:
+                workspace = GitWorkspace.create(
+                    repo, self.options.state_dir, store.run_id, source_head
+                )
+            except (RalphError, OSError) as exc:
+                store.set_run_status("FAILED", "WORKTREE_SETUP_FAILED")
+                store.event("terminal_error", detail={"type": type(exc).__name__})
+                return OrchestrationResult(
+                    RunOutcome.FAILED, "WORKTREE_SETUP_FAILED", store.run_dir
+                )
+            store.state["worktreePath"] = str(workspace.path)
+            store.state["workspaceBaseline"] = workspace.baseline_state()
+            store._write_state()
+        else:
+            store = resume_store
+            state_root = store.run_dir.parent.parent
+            requested_state_root = Path(os.path.abspath(self.options.state_dir.expanduser()))
+            if state_root.resolve() != requested_state_root.resolve():
+                raise PreflightError("resume run does not belong to the requested state directory")
+            try:
+                workspace = GitWorkspace.open(
+                    repo,
+                    requested_state_root,
+                    store.run_id,
+                    source_head,
+                    store.state.get("workspaceBaseline"),
+                )
+            except (RalphError, OSError) as exc:
+                raise PreflightError(f"unable to reopen runtime worktree: {exc}") from exc
+            if Path(str(store.state.get("worktreePath", ""))).resolve() != workspace.path.resolve():
+                raise PreflightError("saved runtime worktree path mismatch")
         store.set_run_status("RUNNING")
-        try:
-            workspace = GitWorkspace.create(repo, self.options.state_dir, store.run_id, source_head)
-        except (RalphError, OSError) as exc:
-            store.set_run_status("FAILED", "WORKTREE_SETUP_FAILED")
-            store.event("terminal_error", detail={"type": type(exc).__name__})
-            return OrchestrationResult(RunOutcome.FAILED, "WORKTREE_SETUP_FAILED", store.run_dir)
-        store.state["worktreePath"] = str(workspace.path)
-        store._write_state()
-        completed: set[str] = set()
-        iterations = 0
+        completed: set[str] = {
+            story_id
+            for story_id, story_state in store.state["stories"].items()
+            if story_state["status"] == "PASS"
+        }
+        iterations = sum(
+            story_state["status"] != "PENDING"
+            for story_state in store.state["stories"].values()
+        )
         active_story_id: Optional[str] = None
         active_attempt = 0
         try:
             for story in prd.stories:
+                story_state = store.state["stories"][story.id]
+                if story_state["status"] == "PASS":
+                    continue
+                if story_state["status"] == "BLOCKED":
+                    active_story_id = story.id
+                    active_attempt = int(story_state.get("attempts", 0))
+                    pending = story_state.get("pendingEvidence")
+                    if story_state.get("reason") != "BLOCKED_VERIFIER" or not isinstance(
+                        pending, dict
+                    ):
+                        reason = "RESUME_STATE_INVALID"
+                        store.set_run_status("FAILED", reason)
+                        return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+                    manifest = tuple(pending.get("changedPaths", ()))
+                    definitions = tuple(
+                        config.checks[check_id] for check_id in story.required_checks
+                    )
+                    immutable_paths = tuple(
+                        pattern
+                        for definition in definitions
+                        for pattern in definition.immutable_paths
+                    )
+                    try:
+                        current_manifest = workspace.validate_manifest(
+                            story.allowed_paths, config.protected_paths, immutable_paths
+                        )
+                        candidate_matches = (
+                            tuple(current_manifest) == manifest
+                            and workspace.head() == pending.get("baseSha")
+                            and workspace.candidate_digest(manifest)
+                            == pending.get("candidateDigest")
+                            and workspace.workspace_digest() == pending.get("workspaceDigest")
+                            and workspace.index_tree() == pending.get("evaluatedTree")
+                        )
+                    except GitPolicyError:
+                        candidate_matches = False
+                    if not candidate_matches:
+                        reason = "RESUME_CANDIDATE_MISMATCH"
+                        store.set_run_status("FAILED", reason)
+                        return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+                    browser_evidence = _browser_evidence_for_story(
+                        self.options.browser_evidence,
+                        story.id,
+                        str(pending["evaluatedTree"]),
+                    )
+                    if browser_evidence is None:
+                        store.set_run_status("BLOCKED", "BLOCKED_VERIFIER")
+                        return OrchestrationResult(
+                            RunOutcome.BLOCKED, "BLOCKED_VERIFIER", store.run_dir
+                        )
+                    store.transition_story(
+                        story.id,
+                        "RUNNING",
+                        attempt=active_attempt,
+                        reason="BROWSER_EVIDENCE_RECEIVED",
+                    )
+                    commit = workspace.commit_verified(
+                        f"feat(ralph-story): complete {story.id.lower()}\n\n"
+                        "Problem: the story required an independently validated implementation.\n"
+                        "Solution: accept the exact candidate tree after all configured gates passed.\n"
+                        f"Scope: {story.id}.\n"
+                        "Tests: orchestrator-owned required checks passed.\n\n"
+                        "Co-authored-by: Codex <codex@frictionlessfuture.com>"
+                    )
+                    commit_tree = workspace.commit_tree(commit)
+                    if commit_tree != pending["evaluatedTree"]:
+                        reason = "TREE_IDENTITY_MISMATCH"
+                        store.transition_story(
+                            story.id, "FAIL", attempt=active_attempt, reason=reason
+                        )
+                        store.set_run_status("FAILED", reason)
+                        return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+                    evidence = {
+                        key: value
+                        for key, value in pending.items()
+                        if key not in {"candidateDigest", "workspaceDigest"}
+                    }
+                    evidence.update(
+                        {
+                            "browser": browser_evidence,
+                            "commit": commit,
+                            "commitTree": commit_tree,
+                            "treeIdentityVerified": True,
+                        }
+                    )
+                    story_state.pop("pendingEvidence", None)
+                    story_state.pop("reason", None)
+                    store.transition_story(
+                        story.id, "PASS", attempt=active_attempt, evidence=evidence
+                    )
+                    completed.add(story.id)
+                    active_story_id = None
+                    continue
                 if iterations >= self.options.max_iterations:
                     store.set_run_status("BLOCKED", "BLOCKED_BUDGET")
                     return OrchestrationResult(RunOutcome.BLOCKED, "BLOCKED_BUDGET", store.run_dir)
@@ -506,6 +695,22 @@ class Orchestrator:
                         )
                 if story.requires_browser and browser_evidence is None:
                     reason = "BLOCKED_VERIFIER"
+                    store.state["stories"][story.id]["pendingEvidence"] = {
+                        "runId": store.run_id,
+                        "storyId": story.id,
+                        "attempt": attempt,
+                        "prdDigest": store.state["prdDigest"],
+                        "configDigest": store.state["configDigest"],
+                        "baseSha": expected_head,
+                        "providerOutcome": result.outcome.value,
+                        "providerMetrics": provider_metrics,
+                        "changedPaths": list(manifest),
+                        "checks": _check_evidence(checks),
+                        "evaluatedTree": evaluated_tree,
+                        "candidateDigest": workspace.candidate_digest(manifest),
+                        "workspaceDigest": workspace.workspace_digest(),
+                    }
+                    store._write_state()
                     store.transition_story(story.id, "BLOCKED", attempt=attempt, reason=reason)
                     store.set_run_status("BLOCKED", reason)
                     return OrchestrationResult(RunOutcome.BLOCKED, reason, store.run_dir)

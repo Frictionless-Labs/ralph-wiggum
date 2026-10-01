@@ -47,6 +47,8 @@ Copy `prd.json.example` to an operator-owned location and edit the stories. Ever
 
 PRD-authored shell commands are not supported. Add or revise commands only in the operator-reviewed configuration as argv arrays with a pinned `containerImage`. Use `network: true` only when a check must fetch locked dependencies. Use `scratchMounts` only for reviewed cache/output directories, with `rw` limited to checks that must write them. Use `immutablePaths` to identify existing validator implementation files that a worker must not change; use a non-secret `environment` mapping for deterministic values such as `VITE_BASE_PATH`.
 
+If a UI story blocks on missing external evidence, inspect and independently verify the preserved staged tree, then pass its exact `git write-tree` ID in the evidence file and resume that run with `--resume-run` plus `--browser-evidence`. Ralph revalidates the saved worktree and does not rerun the provider for the blocked story.
+
 ## Run
 
 ````bash

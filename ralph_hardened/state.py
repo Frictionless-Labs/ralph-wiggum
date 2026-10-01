@@ -119,12 +119,38 @@ class RunStore:
             state = json.loads((resolved / "run.json").read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError) as exc:
             raise StateError(f"invalid run state at {resolved}") from exc
+        if (
+            not isinstance(state, dict)
+            or state.get("schemaVersion") != 1
+            or not isinstance(state.get("runId"), str)
+            or not state["runId"]
+            or not isinstance(state.get("status"), str)
+            or not isinstance(state.get("sourceHead"), str)
+            or not isinstance(state.get("prdDigest"), str)
+            or not isinstance(state.get("stories"), dict)
+            or any(
+                not isinstance(story_id, str)
+                or not story_id
+                or not isinstance(story, dict)
+                or not isinstance(story.get("status"), str)
+                for story_id, story in state.get("stories", {}).items()
+            )
+        ):
+            raise StateError(f"invalid run state at {resolved}")
         store = cls(resolved, state)
-        digest = hashlib.sha256(store.snapshot_path.read_bytes()).hexdigest()
+        try:
+            digest = hashlib.sha256(store.snapshot_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise StateError(f"invalid run state at {resolved}") from exc
         if digest != state.get("prdDigest"):
             raise StateError("immutable PRD snapshot digest mismatch")
         if "configDigest" in state:
-            config_digest = hashlib.sha256(store.config_snapshot_path.read_bytes()).hexdigest()
+            try:
+                config_digest = hashlib.sha256(
+                    store.config_snapshot_path.read_bytes()
+                ).hexdigest()
+            except OSError as exc:
+                raise StateError(f"invalid run state at {resolved}") from exc
             if config_digest != state.get("configDigest"):
                 raise StateError("immutable configuration snapshot digest mismatch")
         return store

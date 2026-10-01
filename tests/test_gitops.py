@@ -6,13 +6,42 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ralph_hardened.errors import GitPolicyError
+from ralph_hardened.errors import GitPolicyError, PreflightError
 from ralph_hardened.gitops import GitWorkspace
 
 from tests.helpers import init_repo, run
 
 
 class GitWorkspaceTests(unittest.TestCase):
+    def test_worktree_creation_does_not_execute_repository_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            marker = root / "hook-ran"
+            hook = repo / ".git" / "hooks" / "post-checkout"
+            hook.write_text(
+                f"#!/bin/sh\ntouch '{marker}'\nprintf 'hooked\\n' > app.txt\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o700)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            self.assertFalse(marker.exists())
+            self.assertEqual((workspace.path / "app.txt").read_text(), "baseline\n")
+
+    def test_symlinked_worktrees_root_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            state = root / "state"
+            redirect = root / "redirect"
+            state.mkdir()
+            redirect.mkdir()
+            (state / "worktrees").symlink_to(redirect, target_is_directory=True)
+            with self.assertRaisesRegex(PreflightError, "worktrees root must be a real directory"):
+                GitWorkspace.create(repo, state, "run-001", head)
+
     def test_dirty_parent_changes_do_not_enter_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -130,6 +159,20 @@ class GitWorkspaceTests(unittest.TestCase):
             before = workspace.ignored_digest()
             (workspace.path / "ignored.txt").write_text("hidden\n", encoding="utf-8")
             self.assertNotEqual(workspace.ignored_digest(), before)
+
+    def test_workspace_digest_includes_mode_only_changes_and_empty_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_digest()
+            (workspace.path / "app.txt").chmod(0o600)
+            self.assertNotEqual(baseline, workspace.workspace_digest())
+            (workspace.path / "app.txt").chmod(0o644)
+            self.assertEqual(baseline, workspace.workspace_digest())
+            (workspace.path / "empty").mkdir()
+            self.assertNotEqual(baseline, workspace.workspace_digest())
 
     def test_existing_validator_file_is_immutable(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

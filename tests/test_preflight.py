@@ -14,6 +14,21 @@ from tests.helpers import prd_payload, write_config, write_prd
 
 
 class PreflightTests(unittest.TestCase):
+    def test_nul_in_check_argument_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = write_config(root / "config.json", ["python3", "print(1)\x00"])
+            with self.assertRaisesRegex(PreflightError, "argv"):
+                load_config(path)
+
+    def test_control_character_in_story_id_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = load_config(write_config(root / "config.json"))
+            path = write_prd(root / "prd.json", id="US-\x00")
+            with self.assertRaisesRegex(PreflightError, "id"):
+                load_prd(path, config)
+
     def test_malformed_prd_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

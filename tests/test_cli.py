@@ -7,12 +7,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ralph_hardened.cli import build_parser, provider_from_name
+from ralph_hardened.cli import _resolve_paths, build_parser, provider_from_name
 
 from tests.helpers import init_repo, write_config, write_prd
 
 
 class CliTests(unittest.TestCase):
+    def test_resume_run_infers_its_state_root(self) -> None:
+        arguments = build_parser().parse_args(
+            ["--resume-run", "/var/tmp/ralph-state/runs/run-001"]
+        )
+        self.assertEqual(_resolve_paths(arguments)[3], Path("/var/tmp/ralph-state"))
+
+    def test_state_path_is_not_resolved_before_symlink_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "target"
+            target.mkdir()
+            state = root / "state"
+            state.symlink_to(target, target_is_directory=True)
+            arguments = build_parser().parse_args(
+                ["--repo", str(root), "--state-dir", str(state)]
+            )
+            resolved_state = _resolve_paths(arguments)[3]
+            self.assertEqual(resolved_state, state.absolute())
+            self.assertTrue(resolved_state.is_symlink())
+
     def test_legacy_positional_iteration_is_supported(self) -> None:
         parser = build_parser()
         arguments = parser.parse_args(["7"])
@@ -102,7 +122,7 @@ class CliTests(unittest.TestCase):
             self.assertIn(str(repo.resolve()), output)
             self.assertIn(str(prd.resolve()), output)
             self.assertIn(str(config.resolve()), output)
-            self.assertIn(str(state.resolve()), output)
+            self.assertIn(str(state.absolute()), output)
 
     def test_missing_repo_is_contract_preflight_exit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

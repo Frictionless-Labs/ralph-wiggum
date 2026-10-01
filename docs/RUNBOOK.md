@@ -80,7 +80,19 @@ If no synchronous browser check is available, pass an independent JSON evidence 
 }
 ````
 
-Absence, malformed evidence, a stale tree ID, or evidence for another story yields `BLOCKED_VERIFIER`; Ralph does not downgrade to prose verification. If the candidate tree is not known in advance and no browser check is configured, let the first run block, independently verify the preserved staged tree, record that exact tree ID, and start a new run against unchanged inputs.
+Absence, malformed evidence, a stale tree ID, or evidence for another story yields `BLOCKED_VERIFIER`; Ralph does not downgrade to prose verification. If the candidate tree is not known in advance and no browser check is configured, let the first run block, independently verify the preserved staged tree, and record that exact tree ID. Resume the same run so Ralph revalidates the unchanged candidate and index before committing it; the provider is not rerun for the blocked story:
+
+````bash
+cd /absolute/path/to/ralph-wiggum
+./ralph.sh \
+  --repo /absolute/path/to/target-repository \
+  --resume-run /absolute/path/to/ralph-state/runs/<run-id> \
+  --browser-evidence /absolute/path/to/browser-evidence.json \
+  --tool codex \
+  --max-iterations 10 \
+  --max-attempts 2 \
+  --timeout-seconds 1800
+````
 
 ### 3. Inspect evidence
 
@@ -90,7 +102,7 @@ python3 -m json.tool run.json
 tail -n 50 events.jsonl
 git -C /absolute/path/to/runtime-worktree status --short
 git -C /absolute/path/to/runtime-worktree log --oneline --decorate -5
-git -C /absolute/path/to/runtime-worktree rev-parse 'HEAD^{tree}'
+git -C /absolute/path/to/runtime-worktree write-tree
 ````
 
 For each PASS, confirm the run/story/attempt, PRD/config digests, source SHA, changed paths, provider outcome/typed metrics, check evidence, browser evidence when required, and tree identity are present. `evaluatedTree` must equal `commitTree`, every named check must PASS, every `containerImage` must be an immutable `sha256:` image ID, and full-output digests plus redacted bounded tails must be present. Provider prose is not evidence.
@@ -101,7 +113,7 @@ For each PASS, confirm the run/story/attempt, PRD/config digests, source SHA, ch
 |---|---|---|
 | `VERIFIED_COMPLETE` / exit `0` | Every frozen story has tree-bound PASS evidence | Review detached commits; integrate only with explicit authorization |
 | `PRECHECK_REJECTED` / exit `2` | Input/config/environment failed before provider use | Correct the named defect and start a new run |
-| `BLOCKED_VERIFIER` / exit `3` | UI evidence capability/result absent | Perform independent browser verification and start a new run with evidence |
+| `BLOCKED_VERIFIER` / exit `3` | UI evidence capability/result absent | Verify the staged tree independently and resume the same run with exact-tree evidence |
 | `BLOCKED_BUDGET` / exit `3` | Iteration ceiling reached with work pending | Review remaining stories; raise ceiling only after scope/cost review |
 | `BLOCKED_NO_PROGRESS` / exit `3` | Worker returned success text without an authorized file change | Refine the story/provider instructions; do not mark PASS manually |
 | `PROVIDER_NONZERO` / exit `4` | Provider exited nonzero | Inspect provider authentication/configuration outside logs; do not expose secrets |

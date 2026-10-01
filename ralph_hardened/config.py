@@ -50,7 +50,10 @@ def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
         if (
             not isinstance(argv, list)
             or not argv
-            or any(not isinstance(item, str) or not item for item in argv)
+            or any(
+                not isinstance(item, str) or not item or "\x00" in item
+                for item in argv
+            )
         ):
             raise PreflightError(f"check {check_id!r} argv must be a non-empty string array")
         timeout = definition.get("timeoutSeconds", 300)

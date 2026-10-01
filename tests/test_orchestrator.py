@@ -285,6 +285,238 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(result.outcome, RunOutcome.BLOCKED)
             self.assertEqual(result.reason, "BLOCKED_VERIFIER")
 
+    def test_blocked_browser_candidate_resumes_without_rerunning_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            write_prd(options.prd_path, requiresBrowser=True)
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            self.assertEqual(first.reason, "BLOCKED_VERIFIER")
+            state = json.loads((first.run_dir / "run.json").read_text(encoding="utf-8"))
+            evaluated_tree = state["stories"]["US-001"]["pendingEvidence"]["evaluatedTree"]
+            evidence = root / "browser.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "evidence": [
+                            {
+                                "storyId": "US-001",
+                                "status": "PASS",
+                                "evaluatedTree": evaluated_tree,
+                                "verifier": "independent-browser",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provider = CommandProvider(
+                "resume-without-provider",
+                (sys.executable, "-c", "raise SystemExit('provider must not run')"),
+                preflight_argv=(sys.executable, "-c", "raise SystemExit(19)"),
+                allows_host_checks=True,
+            )
+            resumed = Orchestrator(
+                self.make_options(
+                    root,
+                    repo,
+                    browser_evidence=evidence,
+                    resume_run=first.run_dir,
+                ),
+                provider,
+            ).run()
+            self.assertEqual(resumed.outcome, RunOutcome.COMPLETE)
+            resumed_state = json.loads((first.run_dir / "run.json").read_text(encoding="utf-8"))
+            story = resumed_state["stories"]["US-001"]
+            self.assertEqual(story["status"], "PASS")
+            self.assertEqual(story["evidence"]["evaluatedTree"], evaluated_tree)
+
+    def test_evidence_only_resume_does_not_require_validator_image(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            write_prd(options.prd_path, requiresBrowser=True)
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            state_path = first.run_dir / "run.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            config_path = first.run_dir / "config.snapshot.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["checks"]["required"]["containerImage"] = "missing-validator:1.0.0"
+            config_bytes = json.dumps(config).encode("utf-8")
+            config_path.write_bytes(config_bytes)
+            digest = __import__("hashlib").sha256(config_bytes).hexdigest()
+            state["configDigest"] = digest
+            state["stories"]["US-001"]["pendingEvidence"]["configDigest"] = digest
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            tree = state["stories"]["US-001"]["pendingEvidence"]["evaluatedTree"]
+            evidence = root / "browser.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "evidence": [
+                            {
+                                "storyId": "US-001",
+                                "status": "PASS",
+                                "evaluatedTree": tree,
+                                "verifier": "independent-browser",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            resumed = Orchestrator(
+                self.make_options(
+                    root, repo, browser_evidence=evidence, resume_run=first.run_dir
+                ),
+                FixtureProvider("nonzero"),
+            ).run()
+            self.assertEqual(resumed.outcome, RunOutcome.COMPLETE)
+
+    def test_resume_worktree_reopen_failure_is_a_preflight_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            write_prd(options.prd_path, requiresBrowser=True)
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            with mock.patch(
+                "ralph_hardened.orchestrator.GitWorkspace.open",
+                side_effect=GitPolicyError("stale worktree metadata"),
+            ):
+                with self.assertRaisesRegex(PreflightError, "unable to reopen"):
+                    Orchestrator(
+                        self.make_options(root, repo, resume_run=first.run_dir),
+                        FixtureProvider("nonzero"),
+                    ).run()
+
+    def test_resume_preflights_only_checks_for_pending_stories(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            config = json.loads(options.config_path.read_text(encoding="utf-8"))
+            config["checks"]["pending"] = dict(config["checks"]["required"])
+            options.config_path.write_text(json.dumps(config), encoding="utf-8")
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            payload["userStories"][0]["requiresBrowser"] = True
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "requiresBrowser": False,
+                    "requiredChecks": ["pending"],
+                    "dependsOn": ["US-001"],
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            state_path = first.run_dir / "run.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            config_path = first.run_dir / "config.snapshot.json"
+            frozen_config = json.loads(config_path.read_text(encoding="utf-8"))
+            frozen_config["checks"]["required"]["containerImage"] = "removed:1.0.0"
+            config_bytes = json.dumps(frozen_config).encode("utf-8")
+            config_path.write_bytes(config_bytes)
+            digest = __import__("hashlib").sha256(config_bytes).hexdigest()
+            state["configDigest"] = digest
+            state["stories"]["US-001"]["pendingEvidence"]["configDigest"] = digest
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            tree = state["stories"]["US-001"]["pendingEvidence"]["evaluatedTree"]
+            evidence = root / "browser.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "evidence": [
+                            {
+                                "storyId": "US-001",
+                                "status": "PASS",
+                                "evaluatedTree": tree,
+                                "verifier": "independent-browser",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            resumed = Orchestrator(
+                self.make_options(
+                    root, repo, browser_evidence=evidence, resume_run=first.run_dir
+                ),
+                FixtureProvider("nonzero"),
+            ).run()
+            self.assertEqual(resumed.outcome, RunOutcome.BLOCKED)
+            self.assertEqual(resumed.reason, "BLOCKED_BUDGET")
+
+    def test_resume_preserves_original_workspace_quota_baseline(self) -> None:
+        class SizedProvider(Provider):
+            name = "sized-fixture"
+            allows_host_checks = True
+
+            def __init__(self, size: int) -> None:
+                self.size = size
+
+            def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
+                (cwd / "app.txt").write_text("x" * self.size, encoding="utf-8")
+                return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            payload["userStories"][0]["requiresBrowser"] = True
+            second = dict(payload["userStories"][0])
+            second.update(
+                {"id": "US-002", "requiresBrowser": False, "dependsOn": ["US-001"]}
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            with mock.patch("ralph_hardened.limits.MAX_FILE_GROWTH_BYTES", 100):
+                first = Orchestrator(options, SizedProvider(80)).run()
+                state = json.loads((first.run_dir / "run.json").read_text(encoding="utf-8"))
+                tree = state["stories"]["US-001"]["pendingEvidence"]["evaluatedTree"]
+                evidence = root / "browser.json"
+                evidence.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "evidence": [
+                                {
+                                    "storyId": "US-001",
+                                    "status": "PASS",
+                                    "evaluatedTree": tree,
+                                    "verifier": "independent-browser",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                resumed = Orchestrator(
+                    self.make_options(
+                        root,
+                        repo,
+                        max_iterations=2,
+                        browser_evidence=evidence,
+                        resume_run=first.run_dir,
+                    ),
+                    SizedProvider(160),
+                ).run()
+            self.assertEqual(resumed.outcome, RunOutcome.FAILED)
+            self.assertEqual(resumed.reason, "GitPolicyError")
+
     def test_browser_check_verifies_current_tree_synchronously(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -26,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=float, default=1800)
     parser.add_argument("--browser-evidence", type=Path)
+    parser.add_argument("--resume-run", type=Path)
     return parser
 
 
@@ -57,9 +59,14 @@ def _resolve_paths(arguments: argparse.Namespace) -> tuple[Path, Path, Path, Pat
     repo = (arguments.repo or package_root).expanduser().resolve()
     prd = (arguments.prd or repo / "prd.json").expanduser().resolve()
     config = (arguments.config or repo / "ralph.config.json").expanduser().resolve()
-    state = (
-        arguments.state_dir or repo.parent / ".ralph-state" / repo.name
-    ).expanduser().resolve()
+    if arguments.state_dir is not None:
+        state = arguments.state_dir
+    elif arguments.resume_run is not None:
+        state = arguments.resume_run.expanduser().absolute().parent.parent
+    else:
+        state = repo.parent / ".ralph-state" / repo.name
+    state = state.expanduser()
+    state = Path(os.path.abspath(state))
     return repo, prd, config, state
 
 
@@ -91,6 +98,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 max_attempts=arguments.max_attempts,
                 timeout_seconds=arguments.timeout_seconds,
                 browser_evidence=arguments.browser_evidence,
+                resume_run=arguments.resume_run,
             ),
             provider,
         ).run()

@@ -13,6 +13,14 @@ from tests.helpers import write_config, write_prd
 
 
 class StateTests(unittest.TestCase):
+    def test_malformed_saved_state_is_rejected_as_state_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw) / "runs" / "bad-run"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(StateError, "invalid run state"):
+                RunStore.load(run_dir)
+
     def test_snapshot_is_immutable_and_digest_is_stable(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
