@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .errors import PreflightError
@@ -27,6 +27,23 @@ _CHECK_FIELDS = frozenset(
         "scratchMounts",
     }
 )
+
+
+def _safe_path_pattern(value: object, *, forbid_git: bool = False) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value == "."
+        or value.startswith("/")
+        or "\\" in value
+        or ":" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        return False
+    parts = PurePosixPath(value).parts
+    if ".." in parts:
+        return False
+    return not forbid_git or all(part.lower() != ".git" for part in parts)
 
 
 def _read_object(path: Path, content: bytes | None = None) -> dict[str, Any]:
@@ -97,11 +114,7 @@ def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
             raise PreflightError(f"check {check_id!r} environment must contain non-secret string values")
         immutable_paths = definition.get("immutablePaths", [])
         if not isinstance(immutable_paths, list) or any(
-            not isinstance(item, str)
-            or not item
-            or item.startswith("/")
-            or "\\" in item
-            or ".." in Path(item).parts
+            not _safe_path_pattern(item)
             for item in immutable_paths
         ):
             raise PreflightError(f"check {check_id!r} immutablePaths must be safe path patterns")
@@ -117,12 +130,7 @@ def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
             raise PreflightError(f"check {check_id!r} network must be boolean")
         scratch_mounts = definition.get("scratchMounts", {})
         if not isinstance(scratch_mounts, dict) or any(
-            not isinstance(item, str)
-            or not item
-            or item.startswith("/")
-            or "\\" in item
-            or ".." in Path(item).parts
-            or ".git" in Path(item).parts
+            not _safe_path_pattern(item, forbid_git=True)
             or mode not in {"ro", "rw"}
             for item, mode in scratch_mounts.items()
         ):
@@ -141,6 +149,8 @@ def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
             scratch_mounts=dict(scratch_mounts),
         )
     protected = raw.get("protectedPaths", [])
-    if not isinstance(protected, list) or any(not isinstance(item, str) or not item for item in protected):
+    if not isinstance(protected, list) or any(
+        not _safe_path_pattern(item) for item in protected
+    ):
         raise PreflightError("protectedPaths must be a string array")
     return RalphConfig(resolved, checks, tuple(protected))

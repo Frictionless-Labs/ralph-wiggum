@@ -272,6 +272,10 @@ class Orchestrator:
             raise PreflightError(f"unable to read immutable run inputs: {exc}") from exc
         config = load_config(config_path, config_bytes)
         prd = load_prd(prd_path, config, prd_bytes)
+        if resume_store is not None and set(resume_store.state["stories"]) != {
+            story.id for story in prd.stories
+        }:
+            raise PreflightError("resumable run story IDs do not match the frozen PRD")
         references = {
             story.id: _read_story_references(
                 repo, source_head, story, tuple(config.protected_paths)
