@@ -130,8 +130,7 @@ def materialize_index(cwd: Path, destination: Path) -> None:
         target = destination / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         if mode == b"160000":
-            target.mkdir(exist_ok=True)
-            continue
+            raise ValueError(f"evaluated tree contains unsupported gitlink: {relative}")
         if mode not in {b"100644", b"100755", b"120000"}:
             raise ValueError(f"evaluated tree contains unsupported mode: {mode!r}")
         temporary_target = target

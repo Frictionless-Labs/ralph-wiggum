@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import re
+import stat
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -35,6 +38,36 @@ def _redact(value: Any, key: str = "") -> Any:
     if isinstance(value, list):
         return [_redact(child) for child in value]
     return value
+
+
+@contextmanager
+def lock_resumable_run(run_dir: Path):
+    requested = Path(os.path.abspath(run_dir.expanduser()))
+    if requested.is_symlink() or not requested.is_dir():
+        raise StateError(f"resume run must be a real directory: {requested}")
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(requested / ".resume.lock", flags, 0o600)
+    except OSError as exc:
+        raise StateError(f"unable to open resume lock at {requested}: {exc}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+        ):
+            raise StateError(f"resume lock is not an owned regular file: {requested}")
+        os.fchmod(descriptor, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise StateError(f"resume run is already active: {requested}") from exc
+        yield
+    finally:
+        os.close(descriptor)
 
 
 class RunStore:

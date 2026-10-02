@@ -7,12 +7,24 @@ import unittest
 from pathlib import Path
 
 from ralph_hardened.errors import StateError
-from ralph_hardened.state import RunStore
+from ralph_hardened.state import RunStore, lock_resumable_run
 
 from tests.helpers import write_config, write_prd
 
 
 class StateTests(unittest.TestCase):
+    def test_resume_lock_rejects_a_concurrent_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            store = RunStore.create(
+                root / "state", write_prd(root / "prd.json"), "head", ["US-001"]
+            )
+            with lock_resumable_run(store.run_dir):
+                with self.assertRaisesRegex(StateError, "already active"):
+                    with lock_resumable_run(store.run_dir):
+                        self.fail("concurrent resume lock was acquired")
+            self.assertEqual((store.run_dir / ".resume.lock").stat().st_mode & 0o777, 0o600)
+
     def test_malformed_saved_state_is_rejected_as_state_error(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw) / "runs" / "bad-run"

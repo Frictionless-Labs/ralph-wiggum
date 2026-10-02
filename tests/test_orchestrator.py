@@ -17,6 +17,7 @@ from ralph_hardened.orchestrator import (
     _check_evidence,
 )
 from ralph_hardened.provider import CommandProvider, Provider
+from ralph_hardened.state import lock_resumable_run
 
 from tests.helpers import init_repo, run, write_config, write_prd
 
@@ -490,6 +491,24 @@ class OrchestratorTests(unittest.TestCase):
                         self.make_options(root, repo, resume_run=first.run_dir),
                         FixtureProvider("nonzero"),
                     ).run()
+
+    def test_concurrent_resume_is_rejected_before_state_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            write_prd(options.prd_path, requiresBrowser=True)
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            with lock_resumable_run(first.run_dir):
+                with self.assertRaisesRegex(PreflightError, "already active"):
+                    Orchestrator(
+                        self.make_options(root, repo, resume_run=first.run_dir),
+                        FixtureProvider("nonzero"),
+                    ).run()
+            state = json.loads((first.run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "BLOCKED")
+            self.assertEqual(state["reason"], "BLOCKED_VERIFIER")
 
     def test_resume_preflights_only_checks_for_pending_stories(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

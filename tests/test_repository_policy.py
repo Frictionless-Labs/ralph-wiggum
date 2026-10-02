@@ -50,6 +50,9 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("PR_CAP_AMBIENT_IS_SET", capcheck)
         self.assertIn('"192.0.2.1"', netcheck)
         self.assertIn('"2001:db8::1"', netcheck)
+        self.assertIn("SOCK_STREAM", netcheck)
+        self.assertIn("SOCK_DGRAM", netcheck)
+        self.assertIn("O_NONBLOCK", netcheck)
 
     def test_ci_and_pages_workflows_are_sha_pinned_and_gated(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

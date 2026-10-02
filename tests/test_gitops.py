@@ -239,7 +239,7 @@ class GitWorkspaceTests(unittest.TestCase):
                     ["link.txt"], [], baseline_inventory=baseline
                 )
 
-    def test_tracked_gitlink_deletion_is_rejected(self) -> None:
+    def test_tracked_gitlink_is_rejected_during_workspace_creation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             repo = root / "source"
@@ -255,40 +255,8 @@ class GitWorkspaceTests(unittest.TestCase):
             )
             run("git", "commit", "-m", "test: add gitlink", cwd=repo)
             head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
-            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
-            baseline = workspace.workspace_inventory()
-            (workspace.path / "vendor" / "submodule").rmdir()
-            with self.assertRaisesRegex(GitPolicyError, "gitlink"):
-                workspace.validate_manifest(
-                    ["vendor/submodule"], [], baseline_inventory=baseline
-                )
-
-    def test_tracked_gitlink_cannot_be_replaced_through_descendant(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            repo = root / "source"
-            init_repo(repo)
-            commit = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
-            run(
-                "git",
-                "update-index",
-                "--add",
-                "--cacheinfo",
-                f"160000,{commit},vendor/submodule",
-                cwd=repo,
-            )
-            run("git", "commit", "-m", "test: add gitlink", cwd=repo)
-            head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
-            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
-            baseline = workspace.workspace_inventory()
-            (workspace.path / "vendor" / "submodule" / "payload.txt").write_text(
-                "replacement\n", encoding="utf-8"
-            )
-
-            with self.assertRaisesRegex(GitPolicyError, "gitlink ancestor"):
-                workspace.validate_manifest(
-                    ["vendor/submodule/**"], [], baseline_inventory=baseline
-                )
+            with self.assertRaisesRegex(GitPolicyError, "unsupported gitlink"):
+                GitWorkspace.create(repo, root / "state", "run-001", head)
 
     def test_ignored_provider_file_changes_digest(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

@@ -18,7 +18,7 @@ from .gitops import GitWorkspace, is_secret_like, matches_path_patterns
 from .models import OrchestrationResult, ProviderOutcome, ProviderResult, RunOutcome, Story
 from .prd import load_prd
 from .provider import CommandProvider, Provider, build_safe_env, normalize_provider_metrics
-from .state import RunStore
+from .state import RunStore, lock_resumable_run
 
 
 _DIAGNOSTIC_ASSIGNMENT = re.compile(
@@ -389,6 +389,15 @@ class Orchestrator:
         )
 
     def run(self) -> OrchestrationResult:
+        if self.options.resume_run is None:
+            return self._run_locked()
+        try:
+            with lock_resumable_run(self.options.resume_run):
+                return self._run_locked()
+        except StateError as exc:
+            raise PreflightError(f"unable to lock resumable run: {exc}") from exc
+
+    def _run_locked(self) -> OrchestrationResult:
         (
             repo,
             source_head,

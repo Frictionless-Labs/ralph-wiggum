@@ -54,7 +54,7 @@ docker build --pull --tag ralph-validator:1.0.1 docker/validator
 ./scripts/run-codex-provider.sh --preflight
 ````
 
-The source checkout may be dirty because execution uses a detached worktree from HEAD. Confirm that excluding uncommitted parent content is intended. Fix malformed inputs, unknown checks, unsafe paths, duplicate IDs, dependency cycles, missing author identity, insecure authentication-file metadata, or unavailable required tools before running. Do not mount additional host paths into the provider container. Validator `scratchMounts` must be reviewed cache/output directories only; parent/child overlaps are prohibited, source components are revalidated before each bind, and candidate source plus validators remain in the read-only staged-tree snapshot.
+The source checkout may be dirty because execution uses a detached worktree from HEAD. Confirm that excluding uncommitted parent content is intended. Fix malformed inputs, unknown checks, unsafe paths, duplicate IDs, dependency cycles, source-tree gitlinks, missing author identity, insecure authentication-file metadata, or unavailable required tools before running. Do not mount additional host paths into the provider container. Validator `scratchMounts` must be reviewed cache/output directories only; parent/child overlaps are prohibited, source components are revalidated before each bind, and candidate source plus validators remain in the read-only staged-tree snapshot.
 
 ### 2. Execute
 
@@ -80,7 +80,7 @@ If no synchronous browser check is available, pass an independent JSON evidence 
 }
 ````
 
-Absence, malformed evidence, a stale tree ID, or evidence for another story yields `BLOCKED_VERIFIER`; Ralph does not downgrade to prose verification. If the candidate tree is not known in advance and no browser check is configured, let the first run block, independently verify the preserved staged tree, and record that exact tree ID. Resume the same run so Ralph revalidates the unchanged candidate and index before committing it; the provider is not rerun for the blocked story:
+Absence, malformed evidence, a stale tree ID, or evidence for another story yields `BLOCKED_VERIFIER`; Ralph does not downgrade to prose verification. If the candidate tree is not known in advance and no browser check is configured, let the first run block, independently verify the preserved staged tree, and record that exact tree ID. Resume the same run so Ralph revalidates the unchanged candidate and index before committing it; the provider is not rerun for the blocked story. A per-run exclusive lock rejects concurrent resume attempts before shared state or the worktree is reopened:
 
 ````bash
 cd /absolute/path/to/ralph-wiggum
