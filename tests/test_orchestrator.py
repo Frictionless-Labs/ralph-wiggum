@@ -495,6 +495,24 @@ class OrchestratorTests(unittest.TestCase):
                         FixtureProvider("nonzero"),
                     ).run()
 
+    def test_resume_rejects_story_ids_that_differ_from_frozen_prd(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            write_prd(options.prd_path, requiresBrowser=True)
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            state_path = first.run_dir / "run.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["stories"] = {"US-RENAMED": state["stories"]["US-001"]}
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            with self.assertRaisesRegex(PreflightError, "story IDs"):
+                Orchestrator(
+                    self.make_options(root, repo, resume_run=first.run_dir),
+                    FixtureProvider("nonzero"),
+                ).run()
+
     def test_concurrent_resume_is_rejected_before_state_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

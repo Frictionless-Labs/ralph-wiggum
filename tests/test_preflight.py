@@ -135,6 +135,38 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(PreflightError, "scratchMounts"):
                 load_config(path)
 
+    def test_nul_in_scratch_mount_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = write_config(root / "config.json")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["checks"]["required"]["scratchMounts"] = {"cache\x00escape": "rw"}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(PreflightError, "scratchMounts"):
+                load_config(path)
+
+    def test_unsafe_config_path_patterns_fail_closed(self) -> None:
+        cases = (
+            ("immutablePaths", ["tests/unsafe\x00path"], "immutablePaths"),
+            ("scratchMounts", {".": "rw"}, "scratchMounts"),
+            ("scratchMounts", {"cache:escape": "rw"}, "scratchMounts"),
+            ("scratchMounts", {".GIT/cache": "rw"}, "scratchMounts"),
+            ("scratchMounts", {"cache\nescape": "rw"}, "scratchMounts"),
+            ("protectedPaths", ["private/unsafe\x00path"], "protectedPaths"),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                path = write_config(root / "config.json")
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if field == "protectedPaths":
+                    payload[field] = value
+                else:
+                    payload["checks"]["required"][field] = value
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaisesRegex(PreflightError, message):
+                    load_config(path)
+
     def test_check_path_override_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
