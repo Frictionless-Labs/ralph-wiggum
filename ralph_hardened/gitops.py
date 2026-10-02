@@ -6,6 +6,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -37,7 +38,8 @@ _SECRET_NAMES = {
 }
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 _SECRET_COMPONENT = re.compile(
-    r"(?:^|[._-])(?:auth|credential|credentials|secret|secrets|token)(?:[._-]|$)"
+    r"(?:^|[._-])(?:api[_-]?key|auth|credential|credentials|secret|secrets|token)"
+    r"(?:[._-]|$)"
 )
 
 
@@ -138,6 +140,8 @@ def materialize_index(cwd: Path, destination: Path) -> None:
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip()
         raise ValueError(f"unable to enumerate evaluated tree: {detail}")
+    entries: list[tuple[bytes, bytes, str, Path]] = []
+    canonical_prefixes: dict[str, str] = {}
     for entry in result.stdout.split(b"\0"):
         if not entry:
             continue
@@ -151,48 +155,116 @@ def materialize_index(cwd: Path, destination: Path) -> None:
         if (
             relative_path.is_absolute()
             or ".." in relative_path.parts
-            or ".git" in relative_path.parts
+            or any(part.lower() == ".git" for part in relative_path.parts)
         ):
             raise ValueError(f"evaluated tree contains an unsafe path: {relative}")
-        target = destination / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
         if mode == b"160000":
             raise ValueError(f"evaluated tree contains unsupported gitlink: {relative}")
         if mode not in {b"100644", b"100755", b"120000"}:
             raise ValueError(f"evaluated tree contains unsupported mode: {mode!r}")
-        temporary_target = target
-        if mode == b"120000":
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f".{target.name}.", suffix=".link", dir=target.parent
+        for prefix_length in range(1, len(relative_path.parts) + 1):
+            prefix_parts = relative_path.parts[:prefix_length]
+            exact_prefix = "/".join(prefix_parts)
+            canonical_prefix = "/".join(
+                unicodedata.normalize("NFC", part).casefold() for part in prefix_parts
             )
-            os.close(descriptor)
-            temporary_target = Path(temporary_name)
-        try:
-            with temporary_target.open("wb") as stream:
-                process = subprocess.Popen(
-                    ("git", "cat-file", "blob", object_id.decode("ascii", "strict")),
-                    cwd=cwd,
-                    env=build_safe_env(),
-                    stdout=stream,
-                    stderr=subprocess.PIPE,
-                    start_new_session=True,
+            prior = canonical_prefixes.setdefault(canonical_prefix, exact_prefix)
+            if prior != exact_prefix:
+                raise ValueError(
+                    f"evaluated tree contains filesystem-colliding paths: {prior} and {exact_prefix}"
                 )
-                _, stderr = process.communicate()
-            if process.returncode != 0:
-                detail = stderr.decode("utf-8", "replace").strip()
-                raise ValueError(f"unable to read evaluated blob {relative}: {detail}")
-            if mode == b"120000":
-                if temporary_target.stat().st_size > 65_536:
-                    raise ValueError(f"evaluated symlink target is too large: {relative}")
-                link_target = os.fsdecode(temporary_target.read_bytes())
-                temporary_target.unlink()
-                os.symlink(link_target, target)
-            else:
-                target.chmod(0o755 if mode == b"100755" else 0o644)
-        except BaseException:
-            if temporary_target.exists() and not temporary_target.is_symlink():
-                temporary_target.unlink()
-            raise
+        entries.append((mode, object_id, relative, relative_path))
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory_only = getattr(os, "O_DIRECTORY", 0)
+    try:
+        root_descriptor = os.open(destination, os.O_RDONLY | directory_only | nofollow)
+    except OSError as exc:
+        raise ValueError(f"materialization destination must be a real directory: {destination}") from exc
+    try:
+        for mode, object_id, relative, relative_path in entries:
+            parent_descriptor = os.dup(root_descriptor)
+            try:
+                for component in relative_path.parts[:-1]:
+                    try:
+                        os.mkdir(component, mode=0o700, dir_fd=parent_descriptor)
+                    except FileExistsError:
+                        if component not in os.listdir(parent_descriptor):
+                            raise ValueError(
+                                f"evaluated tree path collides on this filesystem: {relative}"
+                            )
+                    try:
+                        child_descriptor = os.open(
+                            component,
+                            os.O_RDONLY | directory_only | nofollow,
+                            dir_fd=parent_descriptor,
+                        )
+                    except OSError as exc:
+                        raise ValueError(
+                            f"evaluated tree traverses a non-directory or symlink: {relative}"
+                        ) from exc
+                    os.close(parent_descriptor)
+                    parent_descriptor = child_descriptor
+                target_name = relative_path.name
+                if target_name in os.listdir(parent_descriptor):
+                    raise ValueError(f"evaluated tree contains a duplicate path: {relative}")
+                created = False
+                if mode == b"120000":
+                    stream = tempfile.TemporaryFile(mode="w+b")
+                else:
+                    try:
+                        descriptor = os.open(
+                            target_name,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                            0o600,
+                            dir_fd=parent_descriptor,
+                        )
+                    except OSError as exc:
+                        raise ValueError(
+                            f"evaluated tree path collides on this filesystem: {relative}"
+                        ) from exc
+                    created = True
+                    stream = os.fdopen(descriptor, "w+b")
+                try:
+                    process = subprocess.Popen(
+                        ("git", "cat-file", "blob", object_id.decode("ascii", "strict")),
+                        cwd=cwd,
+                        env=build_safe_env(),
+                        stdout=stream,
+                        stderr=subprocess.PIPE,
+                        start_new_session=True,
+                    )
+                    _, stderr = process.communicate()
+                    if process.returncode != 0:
+                        detail = stderr.decode("utf-8", "replace").strip()
+                        raise ValueError(f"unable to read evaluated blob {relative}: {detail}")
+                    if mode == b"120000":
+                        if stream.tell() > 65_536:
+                            raise ValueError(f"evaluated symlink target is too large: {relative}")
+                        stream.seek(0)
+                        link_target = os.fsdecode(stream.read())
+                        try:
+                            os.symlink(link_target, target_name, dir_fd=parent_descriptor)
+                        except OSError as exc:
+                            raise ValueError(
+                                f"evaluated tree path collides on this filesystem: {relative}"
+                            ) from exc
+                        created = True
+                    else:
+                        os.fchmod(stream.fileno(), 0o755 if mode == b"100755" else 0o644)
+                except BaseException:
+                    if created:
+                        try:
+                            os.unlink(target_name, dir_fd=parent_descriptor)
+                        except OSError:
+                            pass
+                    raise
+                finally:
+                    stream.close()
+            finally:
+                os.close(parent_descriptor)
+    finally:
+        os.close(root_descriptor)
 
 
 @dataclass(frozen=True)

@@ -150,7 +150,7 @@ class RunStore:
         resolved = run_dir.expanduser().resolve()
         try:
             state = json.loads((resolved / "run.json").read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError) as exc:
+        except (FileNotFoundError, UnicodeError, json.JSONDecodeError) as exc:
             raise StateError(f"invalid run state at {resolved}") from exc
         if (
             not isinstance(state, dict)

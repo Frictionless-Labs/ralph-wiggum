@@ -32,7 +32,8 @@ _SECRET_REFERENCE_NAMES = {
 }
 _SECRET_REFERENCE_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 _SECRET_REFERENCE_COMPONENT = re.compile(
-    r"(?:^|[._-])(?:auth|credential|credentials|secret|secrets|token)(?:[._-]|$)"
+    r"(?:^|[._-])(?:api[_-]?key|auth|credential|credentials|secret|secrets|token)"
+    r"(?:[._-]|$)"
 )
 
 
