@@ -19,6 +19,12 @@ _SECRET_NAMES = {".env", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 
 
+def _digest_field(digest: "hashlib._Hash", value: bytes) -> None:
+    """Hash one unambiguously framed field without delimiter assumptions."""
+    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(value)
+
+
 def _run(
     argv: Sequence[str],
     cwd: Path,
@@ -361,7 +367,13 @@ class GitWorkspace:
                     and after[0] == stat.S_IFDIR
                     and any(path.startswith(f"{relative}/") for path in manifest)
                 )
-                if is_new_candidate_parent:
+                is_removed_candidate_parent = (
+                    before is not None
+                    and before[0] == stat.S_IFDIR
+                    and after is None
+                    and any(path.startswith(f"{relative}/") for path in manifest)
+                )
+                if is_new_candidate_parent or is_removed_candidate_parent:
                     continue
                 raise GitPolicyError(f"non-Git workspace artifact is prohibited: {relative}")
         for relative in manifest:
@@ -453,48 +465,55 @@ class GitWorkspace:
             ).stdout
         )
         digest = hashlib.sha256()
+        _digest_field(digest, b"ralph-ignored-digest-v1")
         for relative in sorted(ignored):
-            digest.update(relative.encode("utf-8", "surrogateescape"))
+            _digest_field(digest, relative.encode("utf-8", "surrogateescape"))
             candidate = self.path / relative
             try:
                 metadata = candidate.lstat()
             except FileNotFoundError:
-                digest.update(b"\0missing\0")
+                _digest_field(digest, b"missing")
                 continue
-            digest.update(str(stat.S_IMODE(metadata.st_mode)).encode())
+            _digest_field(digest, str(stat.S_IFMT(metadata.st_mode)).encode("ascii"))
+            _digest_field(digest, str(stat.S_IMODE(metadata.st_mode)).encode("ascii"))
             if stat.S_ISREG(metadata.st_mode):
                 self._digest_file(digest, candidate)
             elif stat.S_ISLNK(metadata.st_mode):
-                digest.update(os.readlink(candidate).encode("utf-8", "surrogateescape"))
+                _digest_field(
+                    digest, os.readlink(candidate).encode("utf-8", "surrogateescape")
+                )
             else:
-                digest.update(b"\0non-regular\0")
+                _digest_field(digest, b"non-regular")
         return digest.hexdigest()
 
     def candidate_digest(self, manifest: Sequence[str]) -> str:
         digest = hashlib.sha256()
+        _digest_field(digest, b"ralph-candidate-digest-v1")
         for relative in sorted(manifest):
-            digest.update(relative.encode("utf-8", "surrogateescape"))
+            _digest_field(digest, relative.encode("utf-8", "surrogateescape"))
             candidate = self.path / relative
             try:
                 metadata = candidate.lstat()
             except FileNotFoundError:
-                digest.update(b"\0deleted\0")
+                _digest_field(digest, b"deleted")
                 continue
-            digest.update(str(stat.S_IMODE(metadata.st_mode)).encode())
+            _digest_field(digest, str(stat.S_IFMT(metadata.st_mode)).encode("ascii"))
+            _digest_field(digest, str(stat.S_IMODE(metadata.st_mode)).encode("ascii"))
             if stat.S_ISREG(metadata.st_mode):
                 self._digest_file(digest, candidate)
             else:
-                digest.update(b"\0non-regular\0")
+                _digest_field(digest, b"non-regular")
         return digest.hexdigest()
 
     def workspace_digest(self) -> str:
         """Bind HEAD plus every non-Git workspace entry and relevant metadata."""
         digest = hashlib.sha256()
-        digest.update(self.head().encode("ascii"))
+        _digest_field(digest, b"ralph-workspace-digest-v1")
+        _digest_field(digest, self.head().encode("ascii"))
         root_metadata = self.path.lstat()
-        digest.update(b".\0")
-        digest.update(str(stat.S_IFMT(root_metadata.st_mode)).encode("ascii"))
-        digest.update(str(stat.S_IMODE(root_metadata.st_mode)).encode("ascii"))
+        _digest_field(digest, b".")
+        _digest_field(digest, str(stat.S_IFMT(root_metadata.st_mode)).encode("ascii"))
+        _digest_field(digest, str(stat.S_IMODE(root_metadata.st_mode)).encode("ascii"))
         for directory, names, files in os.walk(self.path, topdown=True, followlinks=False):
             relative_directory = Path(directory).relative_to(self.path)
             if relative_directory == Path(".") and ".git" in files:
@@ -505,13 +524,15 @@ class GitWorkspace:
                 candidate = Path(directory) / name
                 relative = candidate.relative_to(self.path).as_posix()
                 metadata = candidate.lstat()
-                digest.update(relative.encode("utf-8", "surrogateescape"))
-                digest.update(str(stat.S_IFMT(metadata.st_mode)).encode("ascii"))
-                digest.update(str(stat.S_IMODE(metadata.st_mode)).encode("ascii"))
+                _digest_field(digest, relative.encode("utf-8", "surrogateescape"))
+                _digest_field(digest, str(stat.S_IFMT(metadata.st_mode)).encode("ascii"))
+                _digest_field(digest, str(stat.S_IMODE(metadata.st_mode)).encode("ascii"))
                 if stat.S_ISREG(metadata.st_mode):
                     self._digest_file(digest, candidate)
                 elif stat.S_ISLNK(metadata.st_mode):
-                    digest.update(os.readlink(candidate).encode("utf-8", "surrogateescape"))
+                    _digest_field(
+                        digest, os.readlink(candidate).encode("utf-8", "surrogateescape")
+                    )
         return digest.hexdigest()
 
     def stage_exact(self, manifest: Sequence[str]) -> str:
@@ -554,9 +575,11 @@ class GitWorkspace:
 
     @staticmethod
     def _digest_file(digest: "hashlib._Hash", path: Path) -> None:
+        content_digest = hashlib.sha256()
         with path.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
+                content_digest.update(chunk)
+        _digest_field(digest, content_digest.digest())
 
     def index_tree(self) -> str:
         return _run(("git", "write-tree"), self.path).stdout.decode().strip()

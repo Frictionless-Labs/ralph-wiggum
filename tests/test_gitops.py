@@ -318,6 +318,40 @@ class GitWorkspaceTests(unittest.TestCase):
             (workspace.path / "empty").mkdir()
             self.assertNotEqual(baseline, workspace.workspace_digest())
 
+    def test_workspace_digest_frames_fields_to_prevent_structural_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            original = workspace.path / "a32768420"
+            original.write_text("X", encoding="utf-8")
+            first_digest = workspace.workspace_digest()
+            original.unlink()
+            (workspace.path / "a").write_text("32768420X", encoding="utf-8")
+            self.assertNotEqual(first_digest, workspace.workspace_digest())
+
+    def test_manifest_allows_removal_of_empty_parent_for_tracked_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            init_repo(repo)
+            (repo / "nested").mkdir()
+            (repo / "nested" / "only.txt").write_text("tracked\n", encoding="utf-8")
+            run("git", "add", "nested/only.txt", cwd=repo)
+            run("git", "commit", "-m", "test: add nested fixture", cwd=repo)
+            head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            (workspace.path / "nested" / "only.txt").unlink()
+            (workspace.path / "nested").rmdir()
+            self.assertEqual(
+                workspace.validate_manifest(
+                    ["nested/only.txt"], [], baseline_inventory=baseline
+                ),
+                ("nested/only.txt",),
+            )
+
     def test_workspace_identity_includes_root_mode(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

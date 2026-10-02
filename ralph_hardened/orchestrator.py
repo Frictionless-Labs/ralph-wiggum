@@ -22,7 +22,7 @@ from .state import RunStore
 
 
 _DIAGNOSTIC_ASSIGNMENT = re.compile(
-    r"(?i)(token|secret|password|credential|authorization|api[_-]?key)(\s*[:=]\s*)([^\s,;]+)"
+    r"(?im)(token|secret|password|credential|authorization|api[_-]?key)(\s*[:=]\s*)[^\r\n]*"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*")
 _KEY_SHAPE = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b")
@@ -580,6 +580,17 @@ class Orchestrator:
                         workspace.path,
                         self.options.timeout_seconds,
                     )
+                    try:
+                        workspace.enforce_workspace_limits()
+                    except GitPolicyError:
+                        reason = "GIT_POLICY"
+                        store.transition_story(
+                            story.id, "FAIL", attempt=attempt, reason=reason
+                        )
+                        store.set_run_status("FAILED", reason)
+                        return OrchestrationResult(
+                            RunOutcome.FAILED, reason, store.run_dir
+                        )
                     attempt_digest_after = workspace.workspace_digest()
                     if not isinstance(result, ProviderResult):
                         reason = "MALFORMED_PROVIDER_RESULT"

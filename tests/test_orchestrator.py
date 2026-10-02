@@ -293,6 +293,36 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(result.reason, "PROVIDER_RESIDUAL_CHANGES")
             self.assertEqual(provider.calls, 1)
 
+    def test_workspace_quota_is_enforced_before_post_provider_digest(self) -> None:
+        class OversizedProvider(Provider):
+            name = "oversized-fixture"
+            allows_host_checks = True
+
+            def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
+                with (cwd / "oversized.bin").open("wb") as stream:
+                    stream.truncate(64 * 1024 * 1024 + 1)
+                return ProviderResult(ProviderOutcome.RESOURCE_LIMIT, "", "quota", 1, 0.01)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            from ralph_hardened.gitops import GitWorkspace
+
+            original_digest = GitWorkspace.workspace_digest
+
+            def guarded_digest(workspace: GitWorkspace) -> str:
+                if (workspace.path / "oversized.bin").exists():
+                    raise AssertionError("post-provider digest ran before quota enforcement")
+                return original_digest(workspace)
+
+            with mock.patch.object(GitWorkspace, "workspace_digest", guarded_digest):
+                result = Orchestrator(
+                    self.make_options(root, repo), OversizedProvider()
+                ).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "GIT_POLICY")
+
     def test_clean_retry_may_complete_after_rate_limit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -624,16 +654,17 @@ class OrchestratorTests(unittest.TestCase):
             "fixture",
             False,
             1,
-            "api_key=sk-syntheticsecret123456 detail",
-            "Authorization: Bearer synthetic-token-value",
+            'api_key="synthetic secret value" detail',
+            "Authorization: Basic dXNlcjpwYXNz",
             0.1,
             "FAIL",
         )
         evidence = _check_evidence((result,))[0]
         self.assertIn("stdoutTail", evidence)
         self.assertIn("stderrTail", evidence)
-        self.assertNotIn("syntheticsecret", evidence["stdoutTail"])
-        self.assertNotIn("synthetic-token", evidence["stderrTail"])
+        self.assertNotIn("synthetic secret value", evidence["stdoutTail"])
+        self.assertNotIn("dXNlcjpwYXNz", evidence["stderrTail"])
+        self.assertNotIn("detail", evidence["stdoutTail"])
         self.assertIn("[REDACTED]", evidence["stdoutTail"])
 
     def test_interrupted_execution_is_recorded_as_cancelled(self) -> None:
