@@ -16,9 +16,12 @@ MAX_TOTAL_GROWTH_BYTES = 512 * 1024 * 1024
 class WorkspaceBaseline:
     entries: frozenset[str]
     regular_sizes: Mapping[str, int]
+    root_type: int
+    root_mode: int
 
 
 def capture_workspace_baseline(root: Path) -> WorkspaceBaseline:
+    root_metadata = root.lstat()
     entries: set[str] = set()
     regular_sizes: dict[str, int] = {}
     stack = [(root, "")]
@@ -35,7 +38,12 @@ def capture_workspace_baseline(root: Path) -> WorkspaceBaseline:
                     regular_sizes[relative] = metadata.st_size
                 elif stat.S_ISDIR(metadata.st_mode):
                     stack.append((Path(child.path), relative))
-    return WorkspaceBaseline(frozenset(entries), regular_sizes)
+    return WorkspaceBaseline(
+        frozenset(entries),
+        regular_sizes,
+        stat.S_IFMT(root_metadata.st_mode),
+        stat.S_IMODE(root_metadata.st_mode),
+    )
 
 
 def workspace_limit_violation(root: Path, baseline: WorkspaceBaseline) -> str | None:
@@ -43,6 +51,12 @@ def workspace_limit_violation(root: Path, baseline: WorkspaceBaseline) -> str | 
     total_growth = 0
     stack = [(root, "")]
     try:
+        root_metadata = root.lstat()
+        if (
+            stat.S_IFMT(root_metadata.st_mode) != baseline.root_type
+            or stat.S_IMODE(root_metadata.st_mode) != baseline.root_mode
+        ):
+            return "workspace root metadata changed"
         while stack:
             directory, prefix = stack.pop()
             with os.scandir(directory) as children:

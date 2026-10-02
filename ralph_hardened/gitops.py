@@ -77,8 +77,11 @@ def _matches(path: str, patterns: Iterable[str]) -> bool:
 
 
 def _secret_like(path: str) -> bool:
-    name = Path(path).name.lower()
-    return name in _SECRET_NAMES or name.startswith(".env.") or name.endswith(_SECRET_SUFFIXES)
+    for component in Path(path).parts:
+        name = component.lower()
+        if name in _SECRET_NAMES or name.startswith(".env.") or name.endswith(_SECRET_SUFFIXES):
+            return True
+    return False
 
 
 def matches_path_patterns(path: str, patterns: Iterable[str]) -> bool:
@@ -260,11 +263,20 @@ class GitWorkspace:
             raise PreflightError("saved workspace baseline is missing")
         entries = baseline_state.get("entries")
         regular_sizes = baseline_state.get("regularSizes")
+        root_type = baseline_state.get("rootType")
+        root_mode = baseline_state.get("rootMode")
         if (
             not isinstance(entries, list)
             or any(not isinstance(item, str) or not item for item in entries)
             or len(entries) != len(set(entries))
             or not isinstance(regular_sizes, dict)
+            or not isinstance(root_type, int)
+            or isinstance(root_type, bool)
+            or root_type != stat.S_IFDIR
+            or not isinstance(root_mode, int)
+            or isinstance(root_mode, bool)
+            or root_mode < 0
+            or root_mode > 0o7777
             or any(
                 not isinstance(path, str)
                 or path not in entries
@@ -275,13 +287,17 @@ class GitWorkspace:
             )
         ):
             raise PreflightError("saved workspace baseline is invalid")
-        baseline = WorkspaceBaseline(frozenset(entries), dict(regular_sizes))
+        baseline = WorkspaceBaseline(
+            frozenset(entries), dict(regular_sizes), root_type, root_mode
+        )
         return cls(source, worktree_path, source_head, baseline)
 
     def baseline_state(self) -> dict[str, Any]:
         return {
             "entries": sorted(self.baseline.entries),
             "regularSizes": dict(sorted(self.baseline.regular_sizes.items())),
+            "rootType": self.baseline.root_type,
+            "rootMode": self.baseline.root_mode,
         }
 
     def enforce_workspace_limits(self) -> None:
@@ -367,13 +383,32 @@ class GitWorkspace:
                 raise GitPolicyError(f"symlink changed path is prohibited: {relative}")
             if head_mode == "160000":
                 raise GitPolicyError(f"gitlink changed path is prohibited: {relative}")
+            ancestor = Path(relative).parent
+            while ancestor != Path("."):
+                ancestor_mode = self._mode_in_head(ancestor.as_posix())
+                if ancestor_mode == "160000":
+                    raise GitPolicyError(
+                        f"gitlink ancestor is prohibited: {ancestor.as_posix()}"
+                    )
+                if ancestor_mode == "120000":
+                    raise GitPolicyError(
+                        f"symlink ancestor is prohibited: {ancestor.as_posix()}"
+                    )
+                ancestor = ancestor.parent
             if candidate.is_dir():
                 raise GitPolicyError(f"nested repository or directory entry is prohibited: {relative}")
         return manifest
 
     def workspace_inventory(self) -> dict[str, tuple[int, int, str]]:
         """Capture every non-Git entry's type, mode, and raw content identity."""
-        inventory: dict[str, tuple[int, int, str]] = {}
+        root_metadata = self.path.lstat()
+        inventory: dict[str, tuple[int, int, str]] = {
+            ".": (
+                stat.S_IFMT(root_metadata.st_mode),
+                stat.S_IMODE(root_metadata.st_mode),
+                "",
+            )
+        }
         for directory, names, files in os.walk(self.path, topdown=True, followlinks=False):
             relative_directory = Path(directory).relative_to(self.path)
             if relative_directory == Path("."):
@@ -454,9 +489,12 @@ class GitWorkspace:
 
     def workspace_digest(self) -> str:
         """Bind HEAD plus every non-Git workspace entry and relevant metadata."""
-        self.enforce_workspace_limits()
         digest = hashlib.sha256()
         digest.update(self.head().encode("ascii"))
+        root_metadata = self.path.lstat()
+        digest.update(b".\0")
+        digest.update(str(stat.S_IFMT(root_metadata.st_mode)).encode("ascii"))
+        digest.update(str(stat.S_IMODE(root_metadata.st_mode)).encode("ascii"))
         for directory, names, files in os.walk(self.path, topdown=True, followlinks=False):
             relative_directory = Path(directory).relative_to(self.path)
             if relative_directory == Path(".") and ".git" in files:
