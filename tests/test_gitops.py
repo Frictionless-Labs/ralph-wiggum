@@ -8,12 +8,73 @@ from pathlib import Path
 from unittest import mock
 
 from ralph_hardened.errors import GitPolicyError, PreflightError
-from ralph_hardened.gitops import GitWorkspace
+from ralph_hardened.gitops import GitWorkspace, is_secret_like, materialize_index
 
 from tests.helpers import init_repo, run
 
 
 class GitWorkspaceTests(unittest.TestCase):
+    def test_materialization_rejects_case_and_unicode_path_collisions(self) -> None:
+        collisions = (
+            ("Dir/one.txt", "dir/two.txt"),
+            ("caf\u00e9/one.txt", "cafe\u0301/two.txt"),
+        )
+        for first, second in collisions:
+            with self.subTest(first=first, second=second), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                repo = root / "source"
+                init_repo(repo)
+                run("git", "config", "core.precomposeunicode", "false", cwd=repo)
+                object_id = run("git", "rev-parse", "HEAD:app.txt", cwd=repo).stdout.strip()
+                run(
+                    "git",
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    f"100644,{object_id},{first}",
+                    cwd=repo,
+                )
+                run(
+                    "git",
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    f"100644,{object_id},{second}",
+                    cwd=repo,
+                )
+                destination = root / "destination"
+                destination.mkdir()
+                with self.assertRaisesRegex(ValueError, "filesystem-colliding"):
+                    materialize_index(repo, destination)
+
+    def test_materialization_rejects_symlinked_parent_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            init_repo(repo)
+            object_id = run("git", "rev-parse", "HEAD:app.txt", cwd=repo).stdout.strip()
+            run(
+                "git",
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"100644,{object_id},escape/payload.txt",
+                cwd=repo,
+            )
+            destination = root / "destination"
+            destination.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            (destination / "escape").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "non-directory or symlink"):
+                materialize_index(repo, destination)
+            self.assertFalse((outside / "payload.txt").exists())
+
+    def test_api_key_path_variants_are_secret_like(self) -> None:
+        for path in ("api-key.json", "api_key.txt", "apikey.txt", "config/API_KEY.yaml"):
+            with self.subTest(path=path):
+                self.assertTrue(is_secret_like(path))
+
     def test_worktree_creation_does_not_execute_git_smudge_filters(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

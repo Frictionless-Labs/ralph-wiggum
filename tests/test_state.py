@@ -33,6 +33,16 @@ class StateTests(unittest.TestCase):
             with self.assertRaisesRegex(StateError, "invalid run state"):
                 RunStore.load(run_dir)
 
+    def test_invalid_utf8_saved_state_is_rejected_as_state_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            store = RunStore.create(
+                root / "state", write_prd(root / "prd.json"), "head", ["US-001"]
+            )
+            store.state_path.write_bytes(b"\xff\xfe\x00")
+            with self.assertRaisesRegex(StateError, "invalid run state"):
+                RunStore.load(store.run_dir)
+
     def test_saved_run_id_must_match_its_directory(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

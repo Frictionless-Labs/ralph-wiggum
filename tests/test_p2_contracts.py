@@ -66,6 +66,9 @@ class P2ContractTests(unittest.TestCase):
                 [".aws/credentials"],
                 ["config/credentials.json"],
                 ["secrets.json"],
+                ["api-key.json"],
+                ["config/api_key.txt"],
+                ["apikey.md"],
             ):
                 with self.subTest(references=references):
                     path = root / "prd.json"
