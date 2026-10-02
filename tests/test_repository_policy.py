@@ -37,6 +37,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         execution = text.index("docker_base --strict-config", guard)
         self.assertLess(guard, execution)
         self.assertIn("--ulimit fsize=67108864:67108864", text)
+        self.assertIn("stat.S_IRUSR", text)
 
     def test_ci_and_pages_workflows_are_sha_pinned_and_gated(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

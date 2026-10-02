@@ -142,6 +142,30 @@ class ProviderTests(unittest.TestCase):
             self.assertIn("exit 6", error or "")
             self.assertIn("confinement failed", error or "")
 
+    def test_provider_preflight_timeout_terminates_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            marker = root / "trap-ran"
+            script = root / "preflight.sh"
+            script.write_text(
+                "#!/bin/sh\n"
+                f"trap 'touch {marker}; exit 0' TERM\n"
+                "sleep 30 &\n"
+                "wait\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o700)
+            provider = CommandProvider(
+                "test",
+                [sys.executable, "-c", "print('unused')"],
+                preflight_argv=[str(script)],
+            )
+
+            error = provider.preflight(root, timeout_seconds=0.2)
+
+            self.assertEqual(error, "provider preflight exceeded 0.2 seconds")
+            self.assertTrue(marker.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

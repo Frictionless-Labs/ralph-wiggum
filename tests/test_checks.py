@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -14,6 +15,28 @@ from tests.helpers import init_repo, run
 
 
 class CheckRunnerTests(unittest.TestCase):
+    def test_snapshot_materialization_streams_git_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            real_run = subprocess.run
+
+            def reject_buffered_cat_file(*args: object, **kwargs: object) -> object:
+                argv = args[0]
+                if tuple(argv[:2]) == ("git", "cat-file"):  # type: ignore[index]
+                    self.fail("git cat-file must stream through Popen")
+                return real_run(*args, **kwargs)  # type: ignore[arg-type]
+
+            with tempfile.TemporaryDirectory() as snapshot_raw, mock.patch(
+                "ralph_hardened.gitops.subprocess.run",
+                side_effect=reject_buffered_cat_file,
+            ):
+                snapshot, _ = CheckRunner()._prepare_snapshot(
+                    (), repo, Path(snapshot_raw)
+                )
+                self.assertEqual((snapshot / "app.txt").read_text(), "baseline\n")
+
     def test_snapshot_materialization_does_not_execute_git_smudge_filters(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -14,6 +14,36 @@ from tests.helpers import init_repo, run
 
 
 class GitWorkspaceTests(unittest.TestCase):
+    def test_worktree_creation_does_not_execute_git_smudge_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            init_repo(repo)
+            (repo / ".gitattributes").write_text("*.txt filter=review\n", encoding="utf-8")
+            run("git", "add", ".gitattributes", cwd=repo)
+            run("git", "commit", "-m", "test: add attributes", cwd=repo)
+            marker = root / "smudge-filter-ran"
+            helper = root / "filter.py"
+            helper.write_text(
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[1]).write_text('ran')\n"
+                "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+                encoding="utf-8",
+            )
+            run(
+                "git",
+                "config",
+                "filter.review.smudge",
+                f"{sys.executable} {helper} {marker}",
+                cwd=repo,
+            )
+            head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+
+            self.assertFalse(marker.exists())
+            self.assertEqual((workspace.path / "app.txt").read_text(), "baseline\n")
+
     def test_exact_staging_does_not_execute_git_clean_filters(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -160,6 +190,22 @@ class GitWorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(GitPolicyError, "nested repository"):
                 workspace.validate_manifest(
                     ["vendor/**"], [], baseline_inventory=baseline
+                )
+
+    def test_nested_git_file_is_rejected_before_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            nested = workspace.path / "src"
+            nested.mkdir()
+            (nested / ".git").write_text("gitdir: ../outside\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(GitPolicyError, "nested repository"):
+                workspace.validate_manifest(
+                    ["src/**"], [], baseline_inventory=baseline
                 )
 
     def test_tracked_symlink_deletion_is_rejected(self) -> None:

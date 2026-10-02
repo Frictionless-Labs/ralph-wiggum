@@ -31,6 +31,17 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(PreflightError, "argv"):
                 load_config(path)
 
+    def test_nul_in_check_environment_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = write_config(root / "config.json")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["checks"]["required"]["environment"] = {"SAFE": "x\x00y"}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(PreflightError, "environment"):
+                load_config(path)
+
     def test_control_character_in_story_id_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
