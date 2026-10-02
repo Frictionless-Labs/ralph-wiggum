@@ -352,6 +352,27 @@ class GitWorkspaceTests(unittest.TestCase):
                 ("nested/only.txt",),
             )
 
+    def test_exact_staging_supports_deletion_in_sha256_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            repo.mkdir()
+            run("git", "init", "--object-format=sha256", cwd=repo)
+            run("git", "config", "user.name", "Test User", cwd=repo)
+            run("git", "config", "user.email", "test@example.com", cwd=repo)
+            (repo / "app.txt").write_text("tracked\n", encoding="utf-8")
+            run("git", "add", "app.txt", cwd=repo)
+            run("git", "commit", "-m", "test: add sha256 fixture", cwd=repo)
+            head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            (workspace.path / "app.txt").unlink()
+            manifest = workspace.validate_manifest(
+                ["app.txt"], [], baseline_inventory=baseline
+            )
+            tree = workspace.stage_exact(manifest)
+            self.assertEqual(len(tree), 64)
+
     def test_workspace_identity_includes_root_mode(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

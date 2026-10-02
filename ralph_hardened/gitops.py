@@ -538,7 +538,10 @@ class GitWorkspace:
     def stage_exact(self, manifest: Sequence[str]) -> str:
         _run(("git", "read-tree", "HEAD"), self.path)
         index_info = bytearray()
-        zero_object = "0" * 40
+        head = self.head()
+        if len(head) not in {40, 64} or re.fullmatch(r"[0-9a-f]+", head) is None:
+            raise GitPolicyError("repository uses an unsupported object ID format")
+        zero_object = "0" * len(head)
         for relative in manifest:
             encoded_path = relative.encode("utf-8", "surrogateescape")
             candidate = self.path / relative

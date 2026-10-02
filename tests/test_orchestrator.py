@@ -667,6 +667,19 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("detail", evidence["stdoutTail"])
         self.assertIn("[REDACTED]", evidence["stdoutTail"])
 
+        json_result = CheckResult(
+            "json-fixture",
+            False,
+            1,
+            '{"token":"synthetic-json-secret"}',
+            '{"password": "synthetic json password"}',
+            0.1,
+            "FAIL",
+        )
+        json_evidence = _check_evidence((json_result,))[0]
+        self.assertNotIn("synthetic-json-secret", json_evidence["stdoutTail"])
+        self.assertNotIn("synthetic json password", json_evidence["stderrTail"])
+
     def test_interrupted_execution_is_recorded_as_cancelled(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

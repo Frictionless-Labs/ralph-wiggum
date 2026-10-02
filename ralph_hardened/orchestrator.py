@@ -22,7 +22,7 @@ from .state import RunStore
 
 
 _DIAGNOSTIC_ASSIGNMENT = re.compile(
-    r"(?im)(token|secret|password|credential|authorization|api[_-]?key)(\s*[:=]\s*)[^\r\n]*"
+    r"(?im)(?<![A-Za-z0-9_])([\"']?(?:token|secret|password|credential|authorization|api[_-]?key)[\"']?\s*[:=]\s*)[^\r\n]*"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*")
 _KEY_SHAPE = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b")
@@ -33,7 +33,7 @@ _MAX_WORKER_BRIEF_BYTES = 131_072
 
 def _redact_diagnostic(value: str) -> str:
     value = _BEARER_VALUE.sub("Bearer [REDACTED]", value)
-    value = _DIAGNOSTIC_ASSIGNMENT.sub(r"\1\2[REDACTED]", value)
+    value = _DIAGNOSTIC_ASSIGNMENT.sub(r"\1[REDACTED]", value)
     return _KEY_SHAPE.sub("[REDACTED]", value)
 
 
