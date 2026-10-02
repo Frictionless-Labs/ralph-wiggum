@@ -47,6 +47,8 @@ if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
     raise SystemExit("codex container preflight: authentication path is not a regular file")
 if metadata.st_uid != os.getuid():
     raise SystemExit("codex container preflight: authentication file owner mismatch")
+if not metadata.st_mode & stat.S_IRUSR:
+    raise SystemExit("codex container preflight: authentication file is not owner-readable")
 if stat.S_IMODE(metadata.st_mode) & 0o077:
     raise SystemExit("codex container preflight: authentication file permissions exceed 0600")
 PY

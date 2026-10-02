@@ -171,25 +171,33 @@ class CommandProvider(Provider):
     def preflight(self, cwd: Path, timeout_seconds: float = 30.0) -> Optional[str]:
         if not self.preflight_argv:
             return None
-        try:
-            result = subprocess.run(
-                self.preflight_argv,
-                cwd=cwd,
-                env=build_safe_env(self.extra_env),
-                text=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                timeout=timeout_seconds,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            return f"provider preflight unavailable: {exc}"
-        except subprocess.TimeoutExpired:
-            return f"provider preflight exceeded {timeout_seconds:g} seconds"
-        if result.returncode == 0:
+        with tempfile.TemporaryFile(mode="w+b") as stderr_file:
+            try:
+                process = subprocess.Popen(
+                    self.preflight_argv,
+                    cwd=cwd,
+                    env=build_safe_env(self.extra_env),
+                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr_file,
+                    start_new_session=True,
+                    preexec_fn=limit_subprocess_output,
+                )
+            except FileNotFoundError as exc:
+                return f"provider preflight unavailable: {exc}"
+            try:
+                process.communicate(timeout=timeout_seconds)
+            except KeyboardInterrupt:
+                terminate_process_group(process)
+                raise
+            except subprocess.TimeoutExpired:
+                terminate_process_group(process)
+                return f"provider preflight exceeded {timeout_seconds:g} seconds"
+            stderr_capture = read_captured_output(stderr_file)
+        if process.returncode == 0:
             return None
-        detail = result.stderr.strip()[-500:] or "no diagnostic"
-        return f"provider preflight failed with exit {result.returncode}: {detail}"
+        detail = stderr_capture.text.strip()[-500:] or "no diagnostic"
+        return f"provider preflight failed with exit {process.returncode}: {detail}"
 
     def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
         started = time.monotonic()

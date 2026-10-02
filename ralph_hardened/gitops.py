@@ -5,6 +5,7 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -88,6 +89,77 @@ def is_secret_like(path: str) -> bool:
     return _secret_like(path)
 
 
+def materialize_index(cwd: Path, destination: Path) -> None:
+    """Materialize the current index without running Git content filters."""
+    result = subprocess.run(
+        ("git", "ls-files", "--stage", "-z"),
+        cwd=cwd,
+        env=build_safe_env(),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise ValueError(f"unable to enumerate evaluated tree: {detail}")
+    for entry in result.stdout.split(b"\0"):
+        if not entry:
+            continue
+        metadata, separator, encoded_path = entry.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3 or fields[2] != b"0":
+            raise ValueError("evaluated tree contains an invalid index entry")
+        mode, object_id, _ = fields
+        relative = encoded_path.decode("utf-8", "surrogateescape")
+        relative_path = Path(relative)
+        if (
+            relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or ".git" in relative_path.parts
+        ):
+            raise ValueError(f"evaluated tree contains an unsafe path: {relative}")
+        target = destination / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if mode == b"160000":
+            target.mkdir(exist_ok=True)
+            continue
+        if mode not in {b"100644", b"100755", b"120000"}:
+            raise ValueError(f"evaluated tree contains unsupported mode: {mode!r}")
+        temporary_target = target
+        if mode == b"120000":
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{target.name}.", suffix=".link", dir=target.parent
+            )
+            os.close(descriptor)
+            temporary_target = Path(temporary_name)
+        try:
+            with temporary_target.open("wb") as stream:
+                process = subprocess.Popen(
+                    ("git", "cat-file", "blob", object_id.decode("ascii", "strict")),
+                    cwd=cwd,
+                    env=build_safe_env(),
+                    stdout=stream,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True,
+                )
+                _, stderr = process.communicate()
+            if process.returncode != 0:
+                detail = stderr.decode("utf-8", "replace").strip()
+                raise ValueError(f"unable to read evaluated blob {relative}: {detail}")
+            if mode == b"120000":
+                if temporary_target.stat().st_size > 65_536:
+                    raise ValueError(f"evaluated symlink target is too large: {relative}")
+                link_target = os.fsdecode(temporary_target.read_bytes())
+                temporary_target.unlink()
+                os.symlink(link_target, target)
+            else:
+                target.chmod(0o755 if mode == b"100755" else 0o644)
+        except BaseException:
+            if temporary_target.exists() and not temporary_target.is_symlink():
+                temporary_target.unlink()
+            raise
+
+
 @dataclass(frozen=True)
 class GitWorkspace:
     source_repo: Path
@@ -132,12 +204,19 @@ class GitWorkspace:
                 "core.hooksPath=/dev/null",
                 "worktree",
                 "add",
+                "--no-checkout",
                 "--detach",
                 str(worktree_path),
                 source_head,
             ),
             source,
         )
+        try:
+            _run(("git", "read-tree", "HEAD"), worktree_path)
+            materialize_index(worktree_path, worktree_path)
+        except (OSError, ValueError) as exc:
+            _run(("git", "worktree", "remove", "--force", str(worktree_path)), source)
+            raise GitPolicyError(f"unable to materialize runtime worktree: {exc}") from exc
         try:
             baseline = capture_workspace_baseline(worktree_path)
         except OSError as exc:
@@ -272,6 +351,8 @@ class GitWorkspace:
         for relative in manifest:
             if relative.startswith("/") or ".." in Path(relative).parts or "\x00" in relative:
                 raise GitPolicyError(f"unsafe changed path: {relative}")
+            if ".git" in Path(relative).parts:
+                raise GitPolicyError(f"nested repository is prohibited: {relative}")
             if _secret_like(relative):
                 raise GitPolicyError(f"secret-like changed path is prohibited: {relative}")
             if _matches(relative, protected_paths):

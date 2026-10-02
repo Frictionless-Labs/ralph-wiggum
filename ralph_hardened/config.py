@@ -91,6 +91,7 @@ def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
             or key == "PATH"
             or _SENSITIVE_ENVIRONMENT_KEY.search(key)
             or not isinstance(value, str)
+            or "\x00" in value
             for key, value in environment.items()
         ):
             raise PreflightError(f"check {check_id!r} environment must contain non-secret string values")

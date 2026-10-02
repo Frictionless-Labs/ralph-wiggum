@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .models import CheckDefinition, CheckResult
+from .gitops import materialize_index
 from .provider import (
     build_safe_env,
     limit_subprocess_output,
@@ -29,52 +30,7 @@ class CheckRunner:
         scratch = temporary_root / "scratch"
         snapshot.mkdir()
         scratch.mkdir()
-        result = subprocess.run(
-            ("git", "ls-files", "--stage", "-z"),
-            cwd=cwd,
-            env=build_safe_env(),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if result.returncode != 0:
-            detail = result.stderr.decode("utf-8", "replace").strip()
-            raise ValueError(f"unable to enumerate evaluated tree: {detail}")
-        for entry in result.stdout.split(b"\0"):
-            if not entry:
-                continue
-            metadata, separator, encoded_path = entry.partition(b"\t")
-            fields = metadata.split()
-            if not separator or len(fields) != 3 or fields[2] != b"0":
-                raise ValueError("evaluated tree contains an invalid index entry")
-            mode, object_id, _ = fields
-            relative = encoded_path.decode("utf-8", "surrogateescape")
-            relative_path = Path(relative)
-            if relative_path.is_absolute() or ".." in relative_path.parts:
-                raise ValueError(f"evaluated tree contains an unsafe path: {relative}")
-            target = snapshot / relative_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if mode == b"160000":
-                target.mkdir(exist_ok=True)
-                continue
-            blob = subprocess.run(
-                ("git", "cat-file", "blob", object_id.decode("ascii", "strict")),
-                cwd=cwd,
-                env=build_safe_env(),
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            if blob.returncode != 0:
-                detail = blob.stderr.decode("utf-8", "replace").strip()
-                raise ValueError(f"unable to read evaluated blob {relative}: {detail}")
-            if mode in {b"100644", b"100755"}:
-                target.write_bytes(blob.stdout)
-                target.chmod(0o755 if mode == b"100755" else 0o644)
-            elif mode == b"120000":
-                os.symlink(os.fsdecode(blob.stdout), target)
-            else:
-                raise ValueError(f"evaluated tree contains unsupported mode: {mode!r}")
+        materialize_index(cwd, snapshot)
         scratch_paths = sorted(
             {Path(relative) for definition in definitions for relative in definition.scratch_mounts}
         )
