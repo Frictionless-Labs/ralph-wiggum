@@ -31,7 +31,7 @@ Existing files matched by a check's `immutablePaths` cannot be worker-modified, 
 ## P2 governance contracts
 
 - Provider metrics are optional typed observations. Missing values stay absent; unknown, estimated, non-finite, or malformed values fail closed.
-- An unchanged successful attempt blocks immediately as `BLOCKED_NO_PROGRESS`; provider prose never resets progress. A timed-out or rate-limited attempt may retry only if its complete workspace digest is unchanged; residual edits are terminal and cannot contaminate a later attempt.
+- An unchanged successful attempt blocks immediately as `BLOCKED_NO_PROGRESS`; provider prose never resets progress. A rate-limited attempt may retry only if its complete workspace digest is unchanged. A timed-out attempt additionally requires provider-specific teardown proof; the production Codex adapter fails terminally because it cannot prove container removal. Residual edits are terminal and cannot contaminate a later attempt.
 - PASS evidence binds run/story/attempt, immutable input digests, source SHA, paths, named checks, provider metrics, evaluated tree, commit, and equality proof.
 - Outer schedulers may submit an approved data-only request, query status, receive redacted events, request approval, or cancel by run ID. They cannot write state, provide commands, mutate Git, mark PASS/COMPLETE, access credentials, or release software.
 - Numerical accuracy reports require an independently labeled sample count and raw TP/TN/FP/FN counts. Deterministic test success is implementation evidence, not a reliability percentage.

@@ -24,6 +24,7 @@ from tests.helpers import init_repo, run, write_config, write_prd
 class FixtureProvider(Provider):
     name = "fixture"
     allows_host_checks = True
+    timeout_retry_isolation_proven = True
 
     def __init__(self, behavior: str) -> None:
         self.behavior = behavior
@@ -57,6 +58,10 @@ class FixtureProvider(Provider):
             return ProviderResult(ProviderOutcome.SUCCESS, "<promise>COMPLETE</promise>", "", 0, 0.01)
         if self.behavior == "write-app":
             (cwd / "app.txt").write_text("verified\n", encoding="utf-8")
+            return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
+        if self.behavior == "write-app-and-empty-outside":
+            (cwd / "app.txt").write_text("verified\n", encoding="utf-8")
+            (cwd / "outside-empty").mkdir()
             return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
         if self.behavior == "commit-app":
             (cwd / "app.txt").write_text("provider commit\n", encoding="utf-8")
@@ -229,6 +234,19 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(result.reason, reason)
                 self.assertEqual(provider.calls, 2)
 
+    def test_timeout_without_teardown_proof_does_not_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            provider = FixtureProvider("timeout")
+            provider.timeout_retry_isolation_proven = False
+            options = self.make_options(root, repo, max_attempts=2)
+            result = Orchestrator(options, provider).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "PROVIDER_TIMEOUT")
+            self.assertEqual(provider.calls, 1)
+
     def test_failed_attempt_edits_are_not_inherited_by_retry(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -262,6 +280,18 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(result.reason, "WORKER_MUTATED_HEAD")
             state = json.loads((result.run_dir / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(state["stories"]["US-001"]["status"], "FAIL")
+
+    def test_out_of_scope_empty_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            result = Orchestrator(
+                self.make_options(root, repo),
+                FixtureProvider("write-app-and-empty-outside"),
+            ).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "GIT_POLICY")
 
     def test_failed_required_check_blocks_pass_and_commit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

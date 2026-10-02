@@ -7,7 +7,7 @@ import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .errors import GitPolicyError, PreflightError
 from .limits import WorkspaceBaseline, capture_workspace_baseline, workspace_limit_violation
@@ -222,11 +222,30 @@ class GitWorkspace:
         allowed_paths: Sequence[str],
         protected_paths: Sequence[str],
         immutable_paths: Sequence[str] = (),
+        *,
+        baseline_inventory: Mapping[str, tuple[int, int]] | None = None,
     ) -> tuple[str, ...]:
         self.enforce_workspace_limits()
         manifest = self.changed_paths()
         if not manifest:
             raise GitPolicyError("provider produced no candidate changes")
+        manifest_set = set(manifest)
+        if baseline_inventory is not None:
+            current_inventory = self.workspace_inventory()
+            for relative in sorted(set(baseline_inventory) | set(current_inventory)):
+                before = baseline_inventory.get(relative)
+                after = current_inventory.get(relative)
+                if before == after or relative in manifest_set:
+                    continue
+                is_new_candidate_parent = (
+                    before is None
+                    and after is not None
+                    and after[0] == stat.S_IFDIR
+                    and any(path.startswith(f"{relative}/") for path in manifest)
+                )
+                if is_new_candidate_parent:
+                    continue
+                raise GitPolicyError(f"non-Git workspace artifact is prohibited: {relative}")
         for relative in manifest:
             if relative.startswith("/") or ".." in Path(relative).parts or "\x00" in relative:
                 raise GitPolicyError(f"unsafe changed path: {relative}")
@@ -247,6 +266,26 @@ class GitWorkspace:
             if candidate.is_dir():
                 raise GitPolicyError(f"nested repository or directory entry is prohibited: {relative}")
         return manifest
+
+    def workspace_inventory(self) -> dict[str, tuple[int, int]]:
+        """Capture every non-Git workspace entry's type and permission mode."""
+        inventory: dict[str, tuple[int, int]] = {}
+        for directory, names, files in os.walk(self.path, topdown=True, followlinks=False):
+            relative_directory = Path(directory).relative_to(self.path)
+            if relative_directory == Path("."):
+                names[:] = [name for name in names if name != ".git"]
+                files = [name for name in files if name != ".git"]
+            names.sort()
+            files.sort()
+            for name in names + files:
+                candidate = Path(directory) / name
+                relative = candidate.relative_to(self.path).as_posix()
+                metadata = candidate.lstat()
+                inventory[relative] = (
+                    stat.S_IFMT(metadata.st_mode),
+                    stat.S_IMODE(metadata.st_mode),
+                )
+        return inventory
 
     def _exists_in_head(self, relative: str) -> bool:
         return self._mode_in_head(relative) is not None

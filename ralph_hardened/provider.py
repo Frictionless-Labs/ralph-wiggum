@@ -143,6 +143,7 @@ def build_safe_env(extra: Optional[Mapping[str, str]] = None) -> dict[str, str]:
 class Provider(ABC):
     name: str
     allows_host_checks = False
+    timeout_retry_isolation_proven = False
 
     @abstractmethod
     def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:

@@ -552,6 +552,7 @@ class Orchestrator:
                     if attempt > 1:
                         store.state["stories"][story.id]["attempts"] = attempt
                         store._write_state()
+                    attempt_inventory_before = workspace.workspace_inventory()
                     attempt_digest_before = workspace.workspace_digest()
                     result = self.provider.run(
                         _story_prompt(story, references[story.id]),
@@ -610,7 +611,10 @@ class Orchestrator:
                         store.transition_story(story.id, "FAIL", attempt=attempt, reason=reason)
                         store.set_run_status("FAILED", reason)
                         return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
-                    retryable = result.outcome in {ProviderOutcome.TIMEOUT, ProviderOutcome.RATE_LIMIT}
+                    retryable = result.outcome == ProviderOutcome.RATE_LIMIT or (
+                        result.outcome == ProviderOutcome.TIMEOUT
+                        and self.provider.timeout_retry_isolation_proven
+                    )
                     if retryable and attempt < self.options.max_attempts:
                         continue
                     reason = f"PROVIDER_{result.outcome.value}"
@@ -627,14 +631,24 @@ class Orchestrator:
                     if workspace.ignored_digest() != ignored_before:
                         raise GitPolicyError("provider mutated ignored files")
                     manifest = workspace.validate_manifest(
-                        story.allowed_paths, config.protected_paths, immutable_paths
+                        story.allowed_paths,
+                        config.protected_paths,
+                        immutable_paths,
+                        baseline_inventory=attempt_inventory_before,
                     )
                 except GitPolicyError as exc:
                     reason = "BLOCKED_NO_PROGRESS" if "no candidate changes" in str(exc) else "GIT_POLICY"
-                    terminal = "BLOCKED" if reason == "BLOCKED_NO_PROGRESS" else "FAILED"
-                    store.transition_story(story.id, terminal, attempt=attempt, reason=reason)
-                    store.set_run_status(terminal, reason)
-                    outcome = RunOutcome.BLOCKED if terminal == "BLOCKED" else RunOutcome.FAILED
+                    story_status = "BLOCKED" if reason == "BLOCKED_NO_PROGRESS" else "FAIL"
+                    run_status = "BLOCKED" if reason == "BLOCKED_NO_PROGRESS" else "FAILED"
+                    store.transition_story(
+                        story.id, story_status, attempt=attempt, reason=reason
+                    )
+                    store.set_run_status(run_status, reason)
+                    outcome = (
+                        RunOutcome.BLOCKED
+                        if run_status == "BLOCKED"
+                        else RunOutcome.FAILED
+                    )
                     return OrchestrationResult(outcome, reason, store.run_dir)
                 before_checks = workspace.candidate_digest(manifest)
                 evaluated_tree = workspace.stage_exact(manifest)

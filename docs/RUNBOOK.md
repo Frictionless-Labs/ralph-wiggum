@@ -117,7 +117,7 @@ For each PASS, confirm the run/story/attempt, PRD/config digests, source SHA, ch
 | `BLOCKED_BUDGET` / exit `3` | Iteration ceiling reached with work pending | Review remaining stories; raise ceiling only after scope/cost review |
 | `BLOCKED_NO_PROGRESS` / exit `3` | Worker returned success text without an authorized file change | Refine the story/provider instructions; do not mark PASS manually |
 | `PROVIDER_NONZERO` / exit `4` | Provider exited nonzero | Inspect provider authentication/configuration outside logs; do not expose secrets |
-| `PROVIDER_TIMEOUT` / exit `4` | Provider timed out after bounded attempts | Reduce story size or raise timeout deliberately |
+| `PROVIDER_TIMEOUT` / exit `4` | Provider timed out; production does not retry without teardown proof | Inspect preserved state, then reduce story size or raise timeout deliberately |
 | `PROVIDER_RESIDUAL_CHANGES` / exit `4` | A failed retryable attempt changed the workspace | Inspect the preserved worktree; never inherit partial edits into another attempt |
 | `PROVIDER_RESOURCE_LIMIT` / exit `4` | Candidate exceeded entry, file-growth, or aggregate-growth limits | Split the story or narrow generated artifacts; do not raise limits without security review |
 | `PRECHECK_REJECTED` with provider confinement detail / exit `2` | Docker, image, authentication metadata, or inner sandbox proof failed | Repair only the named boundary and rerun `./scripts/run-codex-provider.sh --preflight` |

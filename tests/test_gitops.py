@@ -174,6 +174,35 @@ class GitWorkspaceTests(unittest.TestCase):
             (workspace.path / "empty").mkdir()
             self.assertNotEqual(baseline, workspace.workspace_digest())
 
+    def test_manifest_rejects_non_git_workspace_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            (workspace.path / "app.txt").write_text("verified\n", encoding="utf-8")
+            (workspace.path / "outside-empty").mkdir()
+            with self.assertRaisesRegex(GitPolicyError, "non-Git workspace artifact"):
+                workspace.validate_manifest(["app.txt"], [], baseline_inventory=baseline)
+
+    def test_manifest_allows_new_parent_directories_for_candidate_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            nested = workspace.path / "src" / "nested"
+            nested.mkdir(parents=True)
+            (nested / "feature.py").write_text("verified\n", encoding="utf-8")
+            self.assertEqual(
+                workspace.validate_manifest(
+                    ["src/**"], [], baseline_inventory=baseline
+                ),
+                ("src/nested/feature.py",),
+            )
+
     def test_existing_validator_file_is_immutable(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
