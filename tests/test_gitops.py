@@ -165,6 +165,20 @@ class GitWorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(GitPolicyError, "secret-like"):
                 workspace.validate_manifest(["**"], [], baseline_inventory=baseline)
 
+    def test_secret_like_parent_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            secret_directory = workspace.path / ".env"
+            secret_directory.mkdir()
+            (secret_directory / "production.json").write_text("{}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(GitPolicyError, "secret-like"):
+                workspace.validate_manifest(["**"], [], baseline_inventory=baseline)
+
     def test_symlink_change_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -249,6 +263,33 @@ class GitWorkspaceTests(unittest.TestCase):
                     ["vendor/submodule"], [], baseline_inventory=baseline
                 )
 
+    def test_tracked_gitlink_cannot_be_replaced_through_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            init_repo(repo)
+            commit = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+            run(
+                "git",
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{commit},vendor/submodule",
+                cwd=repo,
+            )
+            run("git", "commit", "-m", "test: add gitlink", cwd=repo)
+            head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
+            (workspace.path / "vendor" / "submodule" / "payload.txt").write_text(
+                "replacement\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(GitPolicyError, "gitlink ancestor"):
+                workspace.validate_manifest(
+                    ["vendor/submodule/**"], [], baseline_inventory=baseline
+                )
+
     def test_ignored_provider_file_changes_digest(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -276,6 +317,26 @@ class GitWorkspaceTests(unittest.TestCase):
             self.assertEqual(baseline, workspace.workspace_digest())
             (workspace.path / "empty").mkdir()
             self.assertNotEqual(baseline, workspace.workspace_digest())
+
+    def test_workspace_identity_includes_root_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline_inventory = workspace.workspace_inventory()
+            baseline_digest = workspace.workspace_digest()
+            original_mode = workspace.path.stat().st_mode & 0o777
+            workspace.path.chmod(original_mode | 0o022)
+            try:
+                self.assertNotEqual(baseline_digest, workspace.workspace_digest())
+                (workspace.path / "app.txt").write_text("verified\n", encoding="utf-8")
+                with self.assertRaisesRegex(GitPolicyError, "root metadata"):
+                    workspace.validate_manifest(
+                        ["app.txt"], [], baseline_inventory=baseline_inventory
+                    )
+            finally:
+                workspace.path.chmod(original_mode)
 
     def test_manifest_rejects_non_git_workspace_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

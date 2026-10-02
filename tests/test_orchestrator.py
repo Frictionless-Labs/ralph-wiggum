@@ -579,7 +579,7 @@ class OrchestratorTests(unittest.TestCase):
                     SizedProvider(160),
                 ).run()
             self.assertEqual(resumed.outcome, RunOutcome.FAILED)
-            self.assertEqual(resumed.reason, "GitPolicyError")
+            self.assertEqual(resumed.reason, "GIT_POLICY")
 
     def test_browser_check_verifies_current_tree_synchronously(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
