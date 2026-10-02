@@ -125,6 +125,40 @@ class OrchestratorTests(unittest.TestCase):
                 Orchestrator(options, provider).run()
             self.assertEqual(provider.calls, 0)
 
+    def test_cross_check_scratch_overlap_fails_before_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            config = json.loads(options.config_path.read_text(encoding="utf-8"))
+            config["checks"]["required"]["scratchMounts"] = {"cache": "rw"}
+            config["checks"]["nested"] = {
+                "argv": ["python3", "-c", "pass"],
+                "timeoutSeconds": 5,
+                "scratchMounts": {"cache/subdir": "rw"},
+            }
+            options.config_path.write_text(json.dumps(config), encoding="utf-8")
+            write_prd(options.prd_path, requiredChecks=["required", "nested"])
+            provider = FixtureProvider("write-app")
+            with self.assertRaisesRegex(PreflightError, "overlapping scratch mounts"):
+                Orchestrator(options, provider).run()
+            self.assertEqual(provider.calls, 0)
+            self.assertFalse(options.state_dir.exists())
+
+    def test_oversized_worker_brief_fails_before_run_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            write_prd(options.prd_path, description="x" * 140_000)
+            provider = FixtureProvider("write-app")
+            with self.assertRaisesRegex(PreflightError, "worker brief exceeds"):
+                Orchestrator(options, provider).run()
+            self.assertEqual(provider.calls, 0)
+            self.assertFalse(options.state_dir.exists())
+
     def test_production_provider_rejects_unconfined_host_check(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

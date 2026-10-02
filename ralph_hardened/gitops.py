@@ -210,12 +210,27 @@ class GitWorkspace:
         if violation is not None:
             raise GitPolicyError(violation)
 
-    def changed_paths(self) -> tuple[str, ...]:
-        tracked = _decode_nul(_run(("git", "diff", "--name-only", "-z", "HEAD", "--"), self.path).stdout)
-        untracked = _decode_nul(
-            _run(("git", "ls-files", "--others", "--exclude-standard", "-z", "--"), self.path).stdout
-        )
-        return tuple(sorted(set(tracked + untracked)))
+    def changed_paths(
+        self,
+        baseline_inventory: Mapping[str, tuple[int, int, str]],
+        current_inventory: Mapping[str, tuple[int, int, str]] | None = None,
+    ) -> tuple[str, ...]:
+        current = current_inventory or self.workspace_inventory()
+        changed: list[str] = []
+        for relative in sorted(set(baseline_inventory) | set(current)):
+            before = baseline_inventory.get(relative)
+            after = current.get(relative)
+            if before == after:
+                continue
+            if before is not None and after is None and self._mode_in_head(relative) == "160000":
+                changed.append(relative)
+                continue
+            if (before is not None and before[0] == stat.S_IFDIR) or (
+                after is not None and after[0] == stat.S_IFDIR
+            ):
+                continue
+            changed.append(relative)
+        return tuple(changed)
 
     def validate_manifest(
         self,
@@ -223,20 +238,28 @@ class GitWorkspace:
         protected_paths: Sequence[str],
         immutable_paths: Sequence[str] = (),
         *,
-        baseline_inventory: Mapping[str, tuple[int, int]] | None = None,
+        baseline_inventory: Mapping[str, tuple[int, int, str]] | None = None,
+        known_manifest: Sequence[str] | None = None,
     ) -> tuple[str, ...]:
         self.enforce_workspace_limits()
-        manifest = self.changed_paths()
+        current_inventory = self.workspace_inventory()
+        if known_manifest is not None:
+            manifest = tuple(sorted(set(known_manifest)))
+        elif baseline_inventory is not None:
+            manifest = self.changed_paths(baseline_inventory, current_inventory)
+        else:
+            raise GitPolicyError("workspace baseline inventory is required")
         if not manifest:
             raise GitPolicyError("provider produced no candidate changes")
         manifest_set = set(manifest)
         if baseline_inventory is not None:
-            current_inventory = self.workspace_inventory()
             for relative in sorted(set(baseline_inventory) | set(current_inventory)):
                 before = baseline_inventory.get(relative)
                 after = current_inventory.get(relative)
                 if before == after or relative in manifest_set:
                     continue
+                if ".git" in Path(relative).parts:
+                    raise GitPolicyError(f"nested repository is prohibited: {relative}")
                 is_new_candidate_parent = (
                     before is None
                     and after is not None
@@ -267,9 +290,9 @@ class GitWorkspace:
                 raise GitPolicyError(f"nested repository or directory entry is prohibited: {relative}")
         return manifest
 
-    def workspace_inventory(self) -> dict[str, tuple[int, int]]:
-        """Capture every non-Git workspace entry's type and permission mode."""
-        inventory: dict[str, tuple[int, int]] = {}
+    def workspace_inventory(self) -> dict[str, tuple[int, int, str]]:
+        """Capture every non-Git entry's type, mode, and raw content identity."""
+        inventory: dict[str, tuple[int, int, str]] = {}
         for directory, names, files in os.walk(self.path, topdown=True, followlinks=False):
             relative_directory = Path(directory).relative_to(self.path)
             if relative_directory == Path("."):
@@ -281,9 +304,17 @@ class GitWorkspace:
                 candidate = Path(directory) / name
                 relative = candidate.relative_to(self.path).as_posix()
                 metadata = candidate.lstat()
+                content_identity = ""
+                if stat.S_ISREG(metadata.st_mode):
+                    content_digest = hashlib.sha256()
+                    self._digest_file(content_digest, candidate)
+                    content_identity = content_digest.hexdigest()
+                elif stat.S_ISLNK(metadata.st_mode):
+                    content_identity = os.readlink(candidate)
                 inventory[relative] = (
                     stat.S_IFMT(metadata.st_mode),
                     stat.S_IMODE(metadata.st_mode),
+                    content_identity,
                 )
         return inventory
 
@@ -366,20 +397,30 @@ class GitWorkspace:
 
     def stage_exact(self, manifest: Sequence[str]) -> str:
         _run(("git", "read-tree", "HEAD"), self.path)
-        pathspec = b"".join(
-            relative.encode("utf-8", "surrogateescape") + b"\0" for relative in manifest
-        )
+        index_info = bytearray()
+        zero_object = "0" * 40
+        for relative in manifest:
+            encoded_path = relative.encode("utf-8", "surrogateescape")
+            candidate = self.path / relative
+            try:
+                metadata = candidate.lstat()
+            except FileNotFoundError:
+                index_info.extend(f"0 {zero_object}\t".encode("ascii"))
+                index_info.extend(encoded_path + b"\0")
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise GitPolicyError(f"non-regular candidate is prohibited: {relative}")
+            object_id = _run(
+                ("git", "hash-object", "-w", "--no-filters", "--", relative),
+                self.path,
+            ).stdout.decode("ascii", "strict").strip()
+            mode = "100755" if metadata.st_mode & 0o111 else "100644"
+            index_info.extend(f"{mode} {object_id}\t".encode("ascii"))
+            index_info.extend(encoded_path + b"\0")
         _run(
-            (
-                "git",
-                "--literal-pathspecs",
-                "add",
-                "-A",
-                "--pathspec-from-file=-",
-                "--pathspec-file-nul",
-            ),
+            ("git", "update-index", "-z", "--index-info"),
             self.path,
-            input_bytes=pathspec,
+            input_bytes=bytes(index_info),
         )
         staged = _decode_nul(_run(("git", "ls-files", "--stage", "-z"), self.path).stdout)
         manifest_set = set(manifest)

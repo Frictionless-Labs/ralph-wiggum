@@ -223,7 +223,7 @@ class Orchestrator:
         Any,
         bytes,
         bytes,
-        dict[str, tuple[dict[str, str], ...]],
+        dict[str, str],
         Optional[RunStore],
     ]:
         if self.options.max_iterations <= 0 or self.options.max_attempts <= 0:
@@ -277,6 +277,24 @@ class Orchestrator:
             )
             for story in prd.stories
         }
+        worker_briefs = {
+            story.id: _story_prompt(story, references[story.id]) for story in prd.stories
+        }
+        for story in prd.stories:
+            scratch_paths = sorted(
+                {
+                    Path(relative)
+                    for check_id in story.required_checks
+                    for relative in config.checks[check_id].scratch_mounts
+                }
+            )
+            for index, path in enumerate(scratch_paths):
+                for other in scratch_paths[index + 1 :]:
+                    if path != other and path in other.parents:
+                        raise PreflightError(
+                            f"story {story.id} has overlapping scratch mounts: "
+                            f"{path} and {other}"
+                        )
         safe_path = build_safe_env().get("PATH", "")
         execution_required = resume_store is None or any(
             story_state.get("status") == "PENDING"
@@ -365,7 +383,7 @@ class Orchestrator:
             prd,
             config_bytes,
             prd_bytes,
-            references,
+            worker_briefs,
             resume_store,
         )
 
@@ -377,7 +395,7 @@ class Orchestrator:
             prd,
             config_bytes,
             prd_bytes,
-            references,
+            worker_briefs,
             resume_store,
         ) = self._preflight()
         if resume_store is None:
@@ -462,7 +480,10 @@ class Orchestrator:
                     )
                     try:
                         current_manifest = workspace.validate_manifest(
-                            story.allowed_paths, config.protected_paths, immutable_paths
+                            story.allowed_paths,
+                            config.protected_paths,
+                            immutable_paths,
+                            known_manifest=manifest,
                         )
                         candidate_matches = (
                             tuple(current_manifest) == manifest
@@ -555,7 +576,7 @@ class Orchestrator:
                     attempt_inventory_before = workspace.workspace_inventory()
                     attempt_digest_before = workspace.workspace_digest()
                     result = self.provider.run(
-                        _story_prompt(story, references[story.id]),
+                        worker_briefs[story.id],
                         workspace.path,
                         self.options.timeout_seconds,
                     )
@@ -674,7 +695,10 @@ class Orchestrator:
                     store.set_run_status("FAILED", reason)
                     return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                 current_manifest = workspace.validate_manifest(
-                    story.allowed_paths, config.protected_paths, immutable_paths
+                    story.allowed_paths,
+                    config.protected_paths,
+                    immutable_paths,
+                    baseline_inventory=attempt_inventory_before,
                 )
                 if tuple(manifest) != tuple(current_manifest) or workspace.candidate_digest(manifest) != before_checks:
                     reason = "VALIDATOR_MUTATED_CANDIDATE"

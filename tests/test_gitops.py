@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,39 @@ from tests.helpers import init_repo, run
 
 
 class GitWorkspaceTests(unittest.TestCase):
+    def test_exact_staging_does_not_execute_git_clean_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            init_repo(repo)
+            (repo / ".gitattributes").write_text("*.txt filter=review\n", encoding="utf-8")
+            run("git", "add", ".gitattributes", cwd=repo)
+            run("git", "commit", "-m", "test: add attributes", cwd=repo)
+            head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            marker = root / "clean-filter-ran"
+            helper = root / "filter.py"
+            helper.write_text(
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[1]).write_text('ran')\n"
+                "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+                encoding="utf-8",
+            )
+            run(
+                "git",
+                "config",
+                "filter.review.clean",
+                f"{sys.executable} {helper} {marker}",
+                cwd=repo,
+            )
+            baseline = workspace.workspace_inventory()
+            (workspace.path / "app.txt").write_text("verified\n", encoding="utf-8")
+            manifest = workspace.validate_manifest(
+                ["app.txt"], [], baseline_inventory=baseline
+            )
+            workspace.stage_exact(manifest)
+            self.assertFalse(marker.exists())
+
     def test_worktree_creation_does_not_execute_repository_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -69,12 +103,20 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             nested = workspace.path / "src" / "nested"
             nested.mkdir(parents=True)
             (nested / "file.py").write_text("nested\n", encoding="utf-8")
             with self.assertRaisesRegex(GitPolicyError, "outside allowed paths"):
-                workspace.validate_manifest(["src/*.py"], [])
-            self.assertEqual(workspace.validate_manifest(["src/**"], []), ("src/nested/file.py",))
+                workspace.validate_manifest(
+                    ["src/*.py"], [], baseline_inventory=baseline
+                )
+            self.assertEqual(
+                workspace.validate_manifest(
+                    ["src/**"], [], baseline_inventory=baseline
+                ),
+                ("src/nested/file.py",),
+            )
 
     def test_disallowed_and_secret_paths_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -82,13 +124,16 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "other.txt").write_text("no\n", encoding="utf-8")
             with self.assertRaisesRegex(GitPolicyError, "outside allowed paths"):
-                workspace.validate_manifest(["app.txt"], [])
+                workspace.validate_manifest(
+                    ["app.txt"], [], baseline_inventory=baseline
+                )
             (workspace.path / "other.txt").unlink()
             (workspace.path / ".env").write_text("TOKEN=synthetic\n", encoding="utf-8")
             with self.assertRaisesRegex(GitPolicyError, "secret-like"):
-                workspace.validate_manifest(["**"], [])
+                workspace.validate_manifest(["**"], [], baseline_inventory=baseline)
 
     def test_symlink_change_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -96,9 +141,12 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             os.symlink("app.txt", workspace.path / "link.txt")
             with self.assertRaisesRegex(GitPolicyError, "symlink"):
-                workspace.validate_manifest(["link.txt"], [])
+                workspace.validate_manifest(
+                    ["link.txt"], [], baseline_inventory=baseline
+                )
 
     def test_nested_repository_is_rejected_before_staging(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -106,10 +154,13 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             nested = workspace.path / "vendor" / "dependency"
             init_repo(nested)
             with self.assertRaisesRegex(GitPolicyError, "nested repository"):
-                workspace.validate_manifest(["vendor/**"], [])
+                workspace.validate_manifest(
+                    ["vendor/**"], [], baseline_inventory=baseline
+                )
 
     def test_tracked_symlink_deletion_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -121,9 +172,12 @@ class GitWorkspaceTests(unittest.TestCase):
             run("git", "commit", "-m", "test: add symlink", cwd=repo)
             head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "link.txt").unlink()
             with self.assertRaisesRegex(GitPolicyError, "symlink"):
-                workspace.validate_manifest(["link.txt"], [])
+                workspace.validate_manifest(
+                    ["link.txt"], [], baseline_inventory=baseline
+                )
 
     def test_tracked_gitlink_deletion_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -142,9 +196,12 @@ class GitWorkspaceTests(unittest.TestCase):
             run("git", "commit", "-m", "test: add gitlink", cwd=repo)
             head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "vendor" / "submodule").rmdir()
             with self.assertRaisesRegex(GitPolicyError, "gitlink"):
-                workspace.validate_manifest(["vendor/submodule"], [])
+                workspace.validate_manifest(
+                    ["vendor/submodule"], [], baseline_inventory=baseline
+                )
 
     def test_ignored_provider_file_changes_digest(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -215,9 +272,15 @@ class GitWorkspaceTests(unittest.TestCase):
             run("git", "commit", "-m", "test: add validator", cwd=repo)
             head = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "tests" / "acceptance.py").write_text("pass\n", encoding="utf-8")
             with self.assertRaisesRegex(GitPolicyError, "immutable validator"):
-                workspace.validate_manifest(["tests/**"], [], ["tests/**"])
+                workspace.validate_manifest(
+                    ["tests/**"],
+                    [],
+                    ["tests/**"],
+                    baseline_inventory=baseline,
+                )
 
     def test_candidate_growth_limit_fails_before_git_manifest_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -225,20 +288,26 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "large.bin").write_bytes(b"x" * 4096)
             with mock.patch("ralph_hardened.limits.MAX_FILE_GROWTH_BYTES", 128):
                 with self.assertRaisesRegex(GitPolicyError, "file growth limit exceeded"):
-                    workspace.validate_manifest(["large.bin"], [])
+                    workspace.validate_manifest(
+                        ["large.bin"], [], baseline_inventory=baseline
+                    )
 
-    def test_stage_uses_nul_pathspec_input_for_many_paths(self) -> None:
+    def test_stage_uses_nul_index_input_for_many_paths(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             for index in range(40):
                 (workspace.path / f"file-{index:03}.txt").write_text("ok\n", encoding="utf-8")
-            manifest = workspace.validate_manifest(["*.txt"], [])
+            manifest = workspace.validate_manifest(
+                ["*.txt"], [], baseline_inventory=baseline
+            )
             tree = workspace.stage_exact(manifest)
             self.assertEqual(len(manifest), 40)
             self.assertEqual(len(tree), 40)
@@ -249,9 +318,12 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             adversarial = ":(exclude)literal.txt"
             (workspace.path / adversarial).write_text("literal\n", encoding="utf-8")
-            manifest = workspace.validate_manifest(["**"], [])
+            manifest = workspace.validate_manifest(
+                ["**"], [], baseline_inventory=baseline
+            )
             tree = workspace.stage_exact(manifest)
             commit = workspace.commit_verified("test(git): preserve literal path")
             self.assertIn(adversarial, manifest)
@@ -264,8 +336,11 @@ class GitWorkspaceTests(unittest.TestCase):
             repo = root / "source"
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "app.txt").write_text("verified\n", encoding="utf-8")
-            manifest = workspace.validate_manifest(["app.txt"], [])
+            manifest = workspace.validate_manifest(
+                ["app.txt"], [], baseline_inventory=baseline
+            )
             evaluated_tree = workspace.stage_exact(manifest)
             commit = workspace.commit_verified("feat(fixture): verify app")
             self.assertEqual(workspace.commit_tree(commit), evaluated_tree)
@@ -282,8 +357,11 @@ class GitWorkspaceTests(unittest.TestCase):
             hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n", encoding="utf-8")
             hook.chmod(0o700)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            baseline = workspace.workspace_inventory()
             (workspace.path / "app.txt").write_text("verified\n", encoding="utf-8")
-            manifest = workspace.validate_manifest(["app.txt"], [])
+            manifest = workspace.validate_manifest(
+                ["app.txt"], [], baseline_inventory=baseline
+            )
             workspace.stage_exact(manifest)
             workspace.commit_verified("feat(fixture): verify app")
             self.assertFalse(marker.exists())

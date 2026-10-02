@@ -14,6 +14,33 @@ from tests.helpers import init_repo, run
 
 
 class CheckRunnerTests(unittest.TestCase):
+    def test_snapshot_materialization_does_not_execute_git_smudge_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            (repo / ".gitattributes").write_text("*.txt filter=review\n", encoding="utf-8")
+            run("git", "add", ".gitattributes", cwd=repo)
+            run("git", "commit", "-m", "test: add attributes", cwd=repo)
+            marker = root / "smudge-filter-ran"
+            helper = root / "filter.py"
+            helper.write_text(
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[1]).write_text('ran')\n"
+                "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+                encoding="utf-8",
+            )
+            run(
+                "git",
+                "config",
+                "filter.review.smudge",
+                f"{sys.executable} {helper} {marker}",
+                cwd=repo,
+            )
+            with tempfile.TemporaryDirectory() as snapshot_raw:
+                CheckRunner()._prepare_snapshot((), repo, Path(snapshot_raw))
+            self.assertFalse(marker.exists())
+
     def test_container_check_mounts_evaluated_snapshot_read_only(self) -> None:
         definition = CheckDefinition(
             "container",
