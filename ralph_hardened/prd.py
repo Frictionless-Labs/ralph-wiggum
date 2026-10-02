@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -9,8 +10,30 @@ from .models import PRD, RalphConfig, Story
 
 
 MAX_REFERENCE_COUNT = 8
-_SECRET_REFERENCE_NAMES = {".env", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+_SECRET_REFERENCE_NAMES = {
+    ".aws",
+    ".dockercfg",
+    ".docker",
+    ".env",
+    ".gnupg",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".ssh",
+    "auth.json",
+    "credentials",
+    "credentials.json",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+    "secrets.json",
+    "service-account.json",
+}
 _SECRET_REFERENCE_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+_SECRET_REFERENCE_COMPONENT = re.compile(
+    r"(?:^|[._-])(?:auth|credential|credentials|secret|secrets|token)(?:[._-]|$)"
+)
 
 
 def _required_string(raw: dict[str, Any], field: str, context: str) -> str:
@@ -40,14 +63,18 @@ def _validate_allowed_path(value: str, story_id: str) -> None:
 def _validate_reference_path(value: str, story_id: str) -> None:
     _validate_allowed_path(value, story_id)
     path = PurePosixPath(value)
-    name = path.name.lower()
+    components = tuple(component.lower() for component in path.parts)
     if (
         ":" in value
         or any(ord(character) < 32 for character in value)
         or ".git" in path.parts
-        or name in _SECRET_REFERENCE_NAMES
-        or name.startswith(".env.")
-        or name.endswith(_SECRET_REFERENCE_SUFFIXES)
+        or any(
+            component in _SECRET_REFERENCE_NAMES
+            or component.startswith(".env.")
+            or component.endswith(_SECRET_REFERENCE_SUFFIXES)
+            or _SECRET_REFERENCE_COMPONENT.search(component)
+            for component in components
+        )
     ):
         raise PreflightError(f"story {story_id} has protected or secret-like reference: {value}")
 

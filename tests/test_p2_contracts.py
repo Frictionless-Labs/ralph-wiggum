@@ -57,7 +57,16 @@ class P2ContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             config = load_config(write_config(root / "config.json"))
-            for references in (["docs/a.md", "docs/a.md"], ["../escape.md"], [".env"]):
+            for references in (
+                ["docs/a.md", "docs/a.md"],
+                ["../escape.md"],
+                [".env"],
+                [".npmrc"],
+                [".netrc"],
+                [".aws/credentials"],
+                ["config/credentials.json"],
+                ["secrets.json"],
+            ):
                 with self.subTest(references=references):
                     path = root / "prd.json"
                     path.write_text(

@@ -310,9 +310,38 @@ class Orchestrator:
                 if resume_store.state["stories"][story.id].get("status") == "PENDING"
             )
         )
+        stories_requiring_validation = list(stories_requiring_execution)
+        if resume_store is not None:
+            pending_stories = tuple(
+                story
+                for story in prd.stories
+                if resume_store.state["stories"][story.id].get("status") == "PENDING"
+            )
+            blocked_trees = {
+                story_state.get("pendingEvidence", {}).get("evaluatedTree")
+                for story_state in resume_store.state["stories"].values()
+                if story_state.get("status") == "BLOCKED"
+                and isinstance(story_state.get("pendingEvidence"), dict)
+            }
+            final_candidate_tree = (
+                next(iter(blocked_trees))
+                if not pending_stories and len(blocked_trees) == 1
+                else None
+            )
+            for story in prd.stories:
+                story_state = resume_store.state["stories"][story.id]
+                if story_state.get("status") != "PASS":
+                    continue
+                evidence = story_state.get("evidence")
+                if (
+                    final_candidate_tree is None
+                    or not isinstance(evidence, dict)
+                    or evidence.get("evaluatedTree") != final_candidate_tree
+                ):
+                    stories_requiring_validation.append(story)
         required_check_ids = {
             check
-            for story in stories_requiring_execution
+            for story in stories_requiring_validation
             for check in story.required_checks
         }
         resolved_checks = dict(config.checks)
@@ -458,6 +487,14 @@ class Orchestrator:
             for story_id, story_state in store.state["stories"].items()
             if story_state["status"] == "PASS"
         }
+        passed_paths: set[str] = {
+            path
+            for story_state in store.state["stories"].values()
+            if story_state.get("status") == "PASS"
+            and isinstance(story_state.get("evidence"), dict)
+            for path in story_state["evidence"].get("changedPaths", ())
+            if isinstance(path, str)
+        }
         iterations = sum(
             story_state["status"] != "PENDING"
             for story_state in store.state["stories"].values()
@@ -480,6 +517,10 @@ class Orchestrator:
                         store.set_run_status("FAILED", reason)
                         return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                     manifest = tuple(pending.get("changedPaths", ()))
+                    if passed_paths.intersection(manifest):
+                        reason = "PRIOR_STORY_PATH_CHANGED"
+                        store.set_run_status("FAILED", reason)
+                        return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                     definitions = tuple(
                         config.checks[check_id] for check_id in story.required_checks
                     )
@@ -560,6 +601,7 @@ class Orchestrator:
                         story.id, "PASS", attempt=active_attempt, evidence=evidence
                     )
                     completed.add(story.id)
+                    passed_paths.update(manifest)
                     active_story_id = None
                     continue
                 if iterations >= self.options.max_iterations:
@@ -692,6 +734,11 @@ class Orchestrator:
                         else RunOutcome.FAILED
                     )
                     return OrchestrationResult(outcome, reason, store.run_dir)
+                if passed_paths.intersection(manifest):
+                    reason = "PRIOR_STORY_PATH_CHANGED"
+                    store.transition_story(story.id, "FAIL", attempt=attempt, reason=reason)
+                    store.set_run_status("FAILED", reason)
+                    return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                 before_checks = workspace.candidate_digest(manifest)
                 evaluated_tree = workspace.stage_exact(manifest)
                 checks = CheckRunner().run_all(
@@ -807,7 +854,38 @@ class Orchestrator:
                     evidence["browser"] = browser_evidence
                 store.transition_story(story.id, "PASS", attempt=attempt, evidence=evidence)
                 completed.add(story.id)
+                passed_paths.update(manifest)
                 active_story_id = None
+            final_tree = workspace.index_tree()
+            for story in prd.stories:
+                story_state = store.state["stories"][story.id]
+                evidence = story_state.get("evidence")
+                if not isinstance(evidence, dict) or evidence.get("evaluatedTree") == final_tree:
+                    continue
+                definitions = tuple(
+                    config.checks[check_id] for check_id in story.required_checks
+                )
+                checks = CheckRunner().run_all(
+                    definitions,
+                    workspace.path,
+                    allow_host=self.provider.allows_host_checks,
+                )
+                evidence["finalValidation"] = {
+                    "evaluatedTree": final_tree,
+                    "checks": _check_evidence(checks),
+                }
+                store._write_state()
+                if any(not check.passed for check in checks):
+                    reason = "FINAL_REVALIDATION_FAILED"
+                    store.transition_story(
+                        story.id,
+                        "FAIL",
+                        attempt=int(story_state.get("attempts", 0)),
+                        evidence=evidence,
+                        reason=reason,
+                    )
+                    store.set_run_status("FAILED", reason)
+                    return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
             store.set_run_status("COMPLETE")
             return OrchestrationResult(RunOutcome.COMPLETE, "VERIFIED_COMPLETE", store.run_dir)
         except KeyboardInterrupt:

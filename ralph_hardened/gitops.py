@@ -15,8 +15,30 @@ from .limits import WorkspaceBaseline, capture_workspace_baseline, workspace_lim
 from .provider import build_safe_env
 
 
-_SECRET_NAMES = {".env", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+_SECRET_NAMES = {
+    ".aws",
+    ".dockercfg",
+    ".docker",
+    ".env",
+    ".gnupg",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".ssh",
+    "auth.json",
+    "credentials",
+    "credentials.json",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+    "secrets.json",
+    "service-account.json",
+}
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+_SECRET_COMPONENT = re.compile(
+    r"(?:^|[._-])(?:auth|credential|credentials|secret|secrets|token)(?:[._-]|$)"
+)
 
 
 def _digest_field(digest: "hashlib._Hash", value: bytes) -> None:
@@ -85,7 +107,12 @@ def _matches(path: str, patterns: Iterable[str]) -> bool:
 def _secret_like(path: str) -> bool:
     for component in Path(path).parts:
         name = component.lower()
-        if name in _SECRET_NAMES or name.startswith(".env.") or name.endswith(_SECRET_SUFFIXES):
+        if (
+            name in _SECRET_NAMES
+            or name.startswith(".env.")
+            or name.endswith(_SECRET_SUFFIXES)
+            or _SECRET_COMPONENT.search(name)
+        ):
             return True
     return False
 

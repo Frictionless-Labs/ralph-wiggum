@@ -889,6 +889,80 @@ class OrchestratorTests(unittest.TestCase):
             ).stdout.strip()
             self.assertEqual(second_evidence["baseSha"], actual_parent)
 
+    def test_later_story_cannot_modify_a_path_owned_by_prior_pass(self) -> None:
+        class RegressingProvider(Provider):
+            name = "regressing-fixture"
+            allows_host_checks = True
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
+                self.calls += 1
+                value = "story-one\n" if self.calls == 1 else "baseline\n"
+                (cwd / "app.txt").write_text(value, encoding="utf-8")
+                return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            second = dict(payload["userStories"][0])
+            second.update(
+                {"id": "US-002", "title": "Second story", "priority": 2, "dependsOn": ["US-001"]}
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = Orchestrator(options, RegressingProvider()).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "PRIOR_STORY_PATH_CHANGED")
+            state = json.loads((result.run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["stories"]["US-001"]["status"], "PASS")
+            self.assertEqual(state["stories"]["US-002"]["status"], "FAIL")
+
+    def test_prior_story_checks_are_revalidated_against_final_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            config = json.loads(options.config_path.read_text(encoding="utf-8"))
+            config["checks"]["required"]["argv"] = [
+                "python3",
+                "-c",
+                "from pathlib import Path; assert not Path('second.txt').exists()",
+            ]
+            config["checks"]["second"] = {
+                "argv": ["python3", "-c", "from pathlib import Path; assert Path('second.txt').exists()"],
+                "timeoutSeconds": 5,
+            }
+            options.config_path.write_text(json.dumps(config), encoding="utf-8")
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "title": "Second story",
+                    "priority": 2,
+                    "allowedPaths": ["second.txt"],
+                    "requiredChecks": ["second"],
+                    "dependsOn": ["US-001"],
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = Orchestrator(options, FixtureProvider("write-sequential")).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "FINAL_REVALIDATION_FAILED")
+            state = json.loads((result.run_dir / "run.json").read_text(encoding="utf-8"))
+            first = state["stories"]["US-001"]
+            self.assertEqual(first["status"], "FAIL")
+            self.assertEqual(first["evidence"]["finalValidation"]["evaluatedTree"], run(
+                "git", "write-tree", cwd=Path(state["worktreePath"])
+            ).stdout.strip())
+
 
 if __name__ == "__main__":
     unittest.main()

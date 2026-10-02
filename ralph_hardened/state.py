@@ -22,7 +22,7 @@ _STORY_TRANSITIONS = {
     "RUNNING": {"PASS", "FAIL", "BLOCKED"},
     "FAIL": {"RUNNING"},
     "BLOCKED": {"RUNNING"},
-    "PASS": set(),
+    "PASS": {"FAIL"},
 }
 
 
@@ -160,6 +160,7 @@ class RunStore:
             or not isinstance(state.get("status"), str)
             or not isinstance(state.get("sourceHead"), str)
             or not isinstance(state.get("prdDigest"), str)
+            or state.get("runId") != resolved.name
             or not isinstance(state.get("stories"), dict)
             or any(
                 not isinstance(story_id, str)

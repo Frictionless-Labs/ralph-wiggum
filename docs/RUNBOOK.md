@@ -125,6 +125,8 @@ For each PASS, confirm the run/story/attempt, PRD/config digests, source SHA, ch
 | `VALIDATION_FAILED` / exit `4` | Named check failed or was unavailable | Fix the candidate/check dependency; never skip the check |
 | `GIT_POLICY` / exit `4` | Scope, protected path, secret, traversal, or symlink policy failed | Narrow the implementation or explicitly revise reviewed scope |
 | `TREE_IDENTITY_MISMATCH` / exit `4` | Committed content differs from evaluated content | Treat as a security failure; do not integrate the commit |
+| `PRIOR_STORY_PATH_CHANGED` / exit `4` | A later story changed a path already owned by PASS evidence | Combine the dependent work into one story or use a new run from the verified commit |
+| `FINAL_REVALIDATION_FAILED` / exit `4` | An earlier story's checks fail on the final descendant tree | Repair the cross-story regression; never retain COMPLETE |
 | `USER_CANCELLED` / exit `4` | Execution was interrupted | Inspect preserved state/worktree; start a new run from the intended HEAD |
 
 ### 5. Recovery and restart
