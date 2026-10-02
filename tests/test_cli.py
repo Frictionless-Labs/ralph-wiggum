@@ -50,6 +50,7 @@ class CliTests(unittest.TestCase):
         self.assertTrue(provider.argv[0].endswith("scripts/run-codex-provider.sh"))
         self.assertEqual(provider.preflight_argv[-1], "--preflight")
         runner = Path(provider.argv[0]).read_text(encoding="utf-8")
+        self.assertIn("image='ralph-codex-provider:0.145.0-r1'", runner)
         self.assertNotIn("dangerously-skip-permissions", runner)
         self.assertNotIn("dangerously-allow-all", runner)
         self.assertNotIn("bypass-approvals-and-sandbox", runner)
@@ -77,7 +78,14 @@ class CliTests(unittest.TestCase):
             Path(__file__).parents[1] / "docker" / "codex-provider" / "Dockerfile"
         ).read_text(encoding="utf-8")
         self.assertIn("node:22-bookworm-slim@sha256:", dockerfile)
-        self.assertIn("alpine:3.24.1@sha256:", dockerfile)
+        self.assertEqual(
+            dockerfile.count(
+                "cgr.dev/chainguard/wolfi-base@sha256:"
+                "824f77df45397eb954dfb963db255907ee8842e3446353ce93d688e5e862f51d"
+            ),
+            2,
+        )
+        self.assertNotIn("alpine:", dockerfile)
         self.assertIn("CODEX_VERSION=0.145.0", dockerfile)
         self.assertIn("ralph-netcheck", dockerfile)
         self.assertIn('ENTRYPOINT ["codex"]', dockerfile)

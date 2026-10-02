@@ -34,8 +34,8 @@ cd /absolute/path/to/ralph-wiggum
 python3 --version
 git --version
 docker version
-docker image inspect ralph-codex-provider:0.145.0
-docker image inspect ralph-validator:1.0.0
+docker image inspect ralph-codex-provider:0.145.0-r1
+docker image inspect ralph-validator:1.0.1
 stat -f '%Sp %u %N' "$HOME/.codex/auth.json"
 ./scripts/run-codex-provider.sh --preflight
 python3 -m json.tool /absolute/path/to/prd.json >/dev/null
@@ -49,8 +49,8 @@ If either runtime image is absent, build it from the reviewed Dockerfiles before
 
 ````bash
 cd /absolute/path/to/ralph-wiggum
-docker build --pull --tag ralph-codex-provider:0.145.0 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
-docker build --pull --tag ralph-validator:1.0.0 docker/validator
+docker build --pull --tag ralph-codex-provider:0.145.0-r1 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
+docker build --pull --tag ralph-validator:1.0.1 docker/validator
 ./scripts/run-codex-provider.sh --preflight
 ````
 

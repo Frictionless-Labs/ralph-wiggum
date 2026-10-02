@@ -11,7 +11,7 @@ RUN npm install --global --omit=dev --no-audit --no-fund "@openai/codex@${CODEX_
     && install --directory /tmp/codex-native \
     && cp -R "$native_root/." /tmp/codex-native/
 
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS helper-builder
+FROM cgr.dev/chainguard/wolfi-base@sha256:824f77df45397eb954dfb963db255907ee8842e3446353ce93d688e5e862f51d AS helper-builder
 
 RUN apk add --no-cache build-base linux-headers
 
@@ -20,7 +20,7 @@ COPY netcheck.c /tmp/netcheck.c
 RUN cc -static -O2 -Wall -Wextra -Werror /tmp/capcheck.c -o /tmp/ralph-capcheck \
     && cc -static -O2 -Wall -Wextra -Werror /tmp/netcheck.c -o /tmp/ralph-netcheck
 
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM cgr.dev/chainguard/wolfi-base@sha256:824f77df45397eb954dfb963db255907ee8842e3446353ce93d688e5e862f51d
 
 COPY --from=codex-installer /tmp/codex-native/ /opt/codex/
 COPY --from=helper-builder /tmp/ralph-capcheck /usr/local/bin/ralph-capcheck

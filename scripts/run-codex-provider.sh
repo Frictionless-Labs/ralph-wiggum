@@ -3,7 +3,7 @@ set -eu
 PATH='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 export PATH
 
-image='ralph-codex-provider:0.145.0'
+image='ralph-codex-provider:0.145.0-r1'
 image_id=''
 container_home='/home/node'
 auth_path="${HOME:?HOME is required}/.codex/auth.json"

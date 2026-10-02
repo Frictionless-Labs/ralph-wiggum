@@ -10,8 +10,8 @@ Provider output, `passes` fields, completion tokens, and prose test claims have 
 
 ````bash
 ./ralph.sh --repo /absolute/path/to/project --prd /absolute/path/to/prd.json --config /absolute/path/to/ralph.config.json --state-dir /absolute/path/to/state --tool codex --max-iterations 10
-docker build --pull --tag ralph-codex-provider:0.145.0 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
-docker build --pull --tag ralph-validator:1.0.0 docker/validator
+docker build --pull --tag ralph-codex-provider:0.145.0-r1 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
+docker build --pull --tag ralph-validator:1.0.1 docker/validator
 ./scripts/run-codex-provider.sh --preflight
 python3 -m unittest discover -s tests -v
 bash -n ralph.sh

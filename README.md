@@ -28,8 +28,8 @@ Build the reviewed local provider and validator images before the first run:
 
 ````bash
 cd /absolute/path/to/ralph-wiggum
-docker build --pull --tag ralph-codex-provider:0.145.0 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
-docker build --pull --tag ralph-validator:1.0.0 docker/validator
+docker build --pull --tag ralph-codex-provider:0.145.0-r1 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
+docker build --pull --tag ralph-validator:1.0.1 docker/validator
 ./scripts/run-codex-provider.sh --preflight
 ````
 

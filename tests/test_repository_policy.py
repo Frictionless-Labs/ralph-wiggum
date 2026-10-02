@@ -89,16 +89,44 @@ class RepositoryPolicyTests(unittest.TestCase):
     def test_production_checks_are_container_confined(self) -> None:
         config = json.loads((ROOT / "ralph.config.json").read_text(encoding="utf-8"))
         for check in config["checks"].values():
-            self.assertEqual(check["containerImage"], "ralph-validator:1.0.0")
+            self.assertEqual(check["containerImage"], "ralph-validator:1.0.1")
 
-    def test_validator_image_pins_base_and_replaces_distribution_npm(self) -> None:
+    def test_runtime_image_revisions_are_synchronized(self) -> None:
+        provider = "ralph-codex-provider:0.145.0-r1"
+        validator = "ralph-validator:1.0.1"
+        documents = (
+            ROOT / "AGENTS.md",
+            ROOT / "README.md",
+            ROOT / "SPEC.md",
+            ROOT / "docs" / "RUNBOOK.md",
+            ROOT / ".github" / "workflows" / "ci.yml",
+            ROOT / "scripts" / "run-codex-provider.sh",
+        )
+        combined = "\n".join(path.read_text(encoding="utf-8") for path in documents)
+        self.assertIn(provider, combined)
+        self.assertIn(validator, combined)
+        for path in documents:
+            text = path.read_text(encoding="utf-8")
+            if "ralph-codex-provider:" in text:
+                self.assertIn(provider, text, path)
+            if "ralph-validator:" in text:
+                self.assertIn(validator, text, path)
+
+    def test_validator_image_pins_patched_base_and_replaces_distribution_npm(self) -> None:
         dockerfile = (ROOT / "docker" / "validator" / "Dockerfile").read_text(
             encoding="utf-8"
         )
-        self.assertIn("alpine:3.24.1@sha256:", dockerfile)
+        self.assertIn(
+            "cgr.dev/chainguard/wolfi-base@sha256:"
+            "824f77df45397eb954dfb963db255907ee8842e3446353ce93d688e5e862f51d",
+            dockerfile,
+        )
+        self.assertNotIn("alpine:", dockerfile)
+        self.assertIn("nodejs-22", dockerfile)
         self.assertIn("npm@11.19.1", dockerfile)
         self.assertIn("undici@6.28.1", dockerfile)
-        self.assertIn("brace-expansion@5.0.11", dockerfile)
+        self.assertIn("brace-expansion@5.0.12", dockerfile)
+        self.assertIn("ip-address@10.7.1", dockerfile)
         self.assertIn("apk del npm", dockerfile)
         self.assertIn("PATH=/opt/npm/bin:", dockerfile)
 
