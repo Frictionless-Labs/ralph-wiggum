@@ -54,7 +54,7 @@ docker build --pull --tag ralph-validator:1.0.1 docker/validator
 ./scripts/run-codex-provider.sh --preflight
 ````
 
-The source checkout may be dirty because execution uses a detached worktree from HEAD. Confirm that excluding uncommitted parent content is intended. Fix malformed inputs, unknown checks, unsafe paths, duplicate IDs, dependency cycles, source-tree gitlinks, missing author identity, insecure authentication-file metadata, or unavailable required tools before running. Do not mount additional host paths into the provider container. Validator `scratchMounts` must be reviewed cache/output directories only; parent/child overlaps are prohibited, source components are revalidated before each bind, and candidate source plus validators remain in the read-only staged-tree snapshot.
+The source checkout may be dirty because execution uses a detached worktree from HEAD. Confirm that excluding uncommitted parent content is intended. Fix malformed inputs, unknown checks, unsafe paths, duplicate IDs, dependency cycles, source-tree gitlinks, missing author identity, insecure authentication-file metadata, unsafe state-directory ownership or write permissions, or unavailable required tools before running. State directories must be user-owned and deny group/other writes; every ancestor must be user/root-owned and either deny group/other writes or use the sticky bit. Do not mount additional host paths into the provider container. Validator `scratchMounts` must be reviewed cache/output directories only; parent/child overlaps are prohibited, source components are revalidated before each bind, and candidate source plus validators remain in the read-only staged-tree snapshot.
 
 ### 2. Execute
 

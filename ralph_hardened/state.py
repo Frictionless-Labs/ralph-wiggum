@@ -26,6 +26,41 @@ _STORY_TRANSITIONS = {
 }
 
 
+def _assert_nonreplaceable_ancestors(path: Path) -> None:
+    current_uid = os.getuid()
+    current = path
+    while True:
+        try:
+            metadata = current.lstat()
+        except OSError as exc:
+            raise StateError(f"unsafe state hierarchy at {current}: {exc}") from exc
+        mode = metadata.st_mode
+        if not stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
+            raise StateError(f"unsafe state hierarchy at {current}")
+        if metadata.st_uid not in {0, current_uid}:
+            raise StateError(f"unsafe state hierarchy at {current}")
+        if mode & (stat.S_IWGRP | stat.S_IWOTH) and not mode & stat.S_ISVTX:
+            raise StateError(f"unsafe state hierarchy at {current}")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def _assert_owned_state_directory(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise StateError(f"unsafe state hierarchy at {path}: {exc}") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise StateError(f"unsafe state hierarchy at {path}")
+    _assert_nonreplaceable_ancestors(path.parent)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -45,6 +80,7 @@ def lock_resumable_run(run_dir: Path):
     requested = Path(os.path.abspath(run_dir.expanduser()))
     if requested.is_symlink() or not requested.is_dir():
         raise StateError(f"resume run must be a real directory: {requested}")
+    _assert_owned_state_directory(requested)
     flags = os.O_RDWR | os.O_CREAT
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -96,12 +132,17 @@ class RunStore:
         if requested_state_root.is_symlink():
             raise StateError(f"state root must be a real directory: {requested_state_root}")
         state_root = requested_state_root.resolve()
+        existing_ancestor = state_root
+        while not existing_ancestor.exists():
+            existing_ancestor = existing_ancestor.parent
+        _assert_nonreplaceable_ancestors(existing_ancestor)
         state_root_created = not state_root.exists()
         state_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         if state_root.is_symlink() or not state_root.is_dir():
             raise StateError(f"state root must be a real directory: {state_root}")
         if state_root_created:
             state_root.chmod(0o700)
+        _assert_owned_state_directory(state_root)
         runs_root = state_root / "runs"
         runs_root_created = not runs_root.exists()
         runs_root.mkdir(mode=0o700, exist_ok=True)
@@ -109,6 +150,7 @@ class RunStore:
             raise StateError(f"runs root must be a real directory: {runs_root}")
         if runs_root_created:
             runs_root.chmod(0o700)
+        _assert_owned_state_directory(runs_root)
         run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:12]}"
         run_dir = runs_root / run_id
         run_dir.mkdir(mode=0o700)
@@ -148,6 +190,7 @@ class RunStore:
     @classmethod
     def load(cls, run_dir: Path) -> "RunStore":
         resolved = run_dir.expanduser().resolve()
+        _assert_owned_state_directory(resolved)
         try:
             state = json.loads((resolved / "run.json").read_text(encoding="utf-8"))
         except (FileNotFoundError, UnicodeError, json.JSONDecodeError) as exc:
