@@ -32,12 +32,24 @@ class RepositoryPolicyTests(unittest.TestCase):
 
     def test_provider_rechecks_exact_image_confinement_for_each_invocation(self) -> None:
         text = (ROOT / "scripts" / "run-codex-provider.sh").read_text(encoding="utf-8")
+        capcheck = (ROOT / "docker" / "codex-provider" / "capcheck.c").read_text(
+            encoding="utf-8"
+        )
+        netcheck = (ROOT / "docker" / "codex-provider" / "netcheck.c").read_text(
+            encoding="utf-8"
+        )
         branch = text.index("if [ \"${1:-}\" = '--preflight' ]")
         guard = text.index("check_sandbox </dev/null", branch)
         execution = text.index("docker_base --strict-config", guard)
         self.assertLess(guard, execution)
         self.assertIn("--ulimit fsize=67108864:67108864", text)
         self.assertIn("stat.S_IRUSR", text)
+        self.assertIn("ralph-netcheck --prove-denied", text)
+        self.assertIn("data[0].permitted", capcheck)
+        self.assertIn("data[0].inheritable", capcheck)
+        self.assertIn("PR_CAP_AMBIENT_IS_SET", capcheck)
+        self.assertIn('"192.0.2.1"', netcheck)
+        self.assertIn('"2001:db8::1"', netcheck)
 
     def test_ci_and_pages_workflows_are_sha_pinned_and_gated(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

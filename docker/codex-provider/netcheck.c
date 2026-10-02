@@ -1,4 +1,7 @@
+#include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,14 +13,62 @@ static void timeout_handler(int signal_number) {
     _exit(2);
 }
 
+static int denial_errno(int error_number) {
+    return error_number == EACCES || error_number == EPERM ||
+           error_number == ENETUNREACH || error_number == EHOSTUNREACH ||
+           error_number == ENETDOWN || error_number == EAFNOSUPPORT ||
+           error_number == EPROTONOSUPPORT;
+}
+
+static int prove_family_denied(int family) {
+    int socket_fd = socket(family, SOCK_DGRAM, 0);
+    if (socket_fd < 0) {
+        return denial_errno(errno) ? 0 : 2;
+    }
+    int result;
+    if (family == AF_INET) {
+        struct sockaddr_in target = {0};
+        target.sin_family = AF_INET;
+        target.sin_port = htons(9);
+        if (inet_pton(AF_INET, "192.0.2.1", &target.sin_addr) != 1) {
+            close(socket_fd);
+            return 2;
+        }
+        result = connect(socket_fd, (struct sockaddr *)&target, sizeof(target));
+    } else {
+        struct sockaddr_in6 target = {0};
+        target.sin6_family = AF_INET6;
+        target.sin6_port = htons(9);
+        if (inet_pton(AF_INET6, "2001:db8::1", &target.sin6_addr) != 1) {
+            close(socket_fd);
+            return 2;
+        }
+        result = connect(socket_fd, (struct sockaddr *)&target, sizeof(target));
+    }
+    int error_number = errno;
+    close(socket_fd);
+    if (result == 0) {
+        return 1;
+    }
+    return denial_errno(error_number) ? 0 : 2;
+}
+
 int main(int argc, char **argv) {
     struct addrinfo hints = {0};
     struct addrinfo *addresses = NULL;
     struct addrinfo *address = NULL;
     int connected = 1;
 
+    if (argc == 2 && strcmp(argv[1], "--prove-denied") == 0) {
+        int ipv4 = prove_family_denied(AF_INET);
+        int ipv6 = prove_family_denied(AF_INET6);
+        if (ipv4 == 1 || ipv6 == 1) {
+            return 1;
+        }
+        return (ipv4 == 0 && ipv6 == 0) ? 0 : 2;
+    }
     if (argc != 3) {
-        fprintf(stderr, "usage: ralph-netcheck HOST PORT\n");
+        fprintf(stderr, "usage: ralph-netcheck HOST PORT | --prove-denied\n");
         return 2;
     }
 

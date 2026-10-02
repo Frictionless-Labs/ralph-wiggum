@@ -117,7 +117,7 @@ check_sandbox() {
 $(profile_args)
 EOF
   docker_base "$@" sandbox -P ralph -C /workspace -- /bin/sh -c \
-    'test -r /workspace && test -x /workspace || { echo "workspace read denied" >&2; exit 20; }; /bin/cat /home/node/.codex/auth.json >/dev/null 2>&1 && { echo "authentication read allowed" >&2; exit 21; }; ralph-capcheck || { echo "worker capabilities retained" >&2; exit 22; }; ralph-netcheck api.openai.com 443 >/dev/null 2>&1 && { echo "direct network allowed" >&2; exit 23; }; exit 0' \
+    'test -r /workspace && test -x /workspace || { echo "workspace read denied" >&2; exit 20; }; /bin/cat /home/node/.codex/auth.json >/dev/null 2>&1 && { echo "authentication read allowed" >&2; exit 21; }; ralph-capcheck || { echo "worker capabilities retained" >&2; exit 22; }; ralph-netcheck --prove-denied || { echo "direct network denial unproved" >&2; exit 23; }; exit 0' \
     >/dev/null || die 'inner filesystem confinement proof failed'
 }
 

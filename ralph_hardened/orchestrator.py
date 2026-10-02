@@ -22,7 +22,8 @@ from .state import RunStore
 
 
 _DIAGNOSTIC_ASSIGNMENT = re.compile(
-    r"(?im)(?<![A-Za-z0-9_])([\"']?(?:token|secret|password|credential|authorization|api[_-]?key)[\"']?\s*[:=]\s*)[^\r\n]*"
+    r"(?im)([\"']?[A-Za-z0-9_-]*(?:token|secret|password|credential|authorization|api[_-]?key)"
+    r"[A-Za-z0-9_-]*[\"']?\s*[:=]\s*)[^\r\n]*"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*")
 _KEY_SHAPE = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b")
