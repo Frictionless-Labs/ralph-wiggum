@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
 
-from ralph_hardened.models import ProviderOutcome, ProviderResult, RunOutcome
+from ralph_hardened.checks import CheckRunner
+from ralph_hardened.models import CheckResult, ProviderOutcome, ProviderResult, RunOutcome
 from ralph_hardened.errors import GitPolicyError, PreflightError
 from ralph_hardened.orchestrator import (
     Orchestrator,
@@ -962,6 +965,243 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(first["evidence"]["finalValidation"]["evaluatedTree"], run(
                 "git", "write-tree", cwd=Path(state["worktreePath"])
             ).stdout.strip())
+
+    def test_resumed_blocked_story_final_check_uses_resolved_image(self) -> None:
+        class SecondStoryProvider(Provider):
+            name = "second-story-fixture"
+            allows_host_checks = True
+
+            def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
+                (cwd / "second.txt").write_text("second\n", encoding="utf-8")
+                return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            config = json.loads(options.config_path.read_text(encoding="utf-8"))
+            config["checks"]["required"]["containerImage"] = "validator:1.0.0"
+            config["checks"]["second"] = {
+                "argv": ["python3", "-c", "pass"],
+                "timeoutSeconds": 5,
+            }
+            options.config_path.write_text(json.dumps(config), encoding="utf-8")
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            payload["userStories"][0]["requiresBrowser"] = True
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "title": "Second story",
+                    "priority": 2,
+                    "allowedPaths": ["second.txt"],
+                    "requiredChecks": ["second"],
+                    "dependsOn": ["US-001"],
+                    "requiresBrowser": False,
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            image_id = "sha256:" + "a" * 64
+            actual_run = subprocess.run
+            actual_which = shutil.which
+            check_calls: list[tuple[object, ...]] = []
+
+            def run_with_image_inspect(argv: object, *args: object, **kwargs: object):
+                if isinstance(argv, tuple) and argv[:3] == ("docker", "image", "inspect"):
+                    return subprocess.CompletedProcess(argv, 0, image_id + "\n", "")
+                return actual_run(argv, *args, **kwargs)  # type: ignore[arg-type]
+
+            def which_with_docker(executable: str, *args: object, **kwargs: object):
+                if executable == "docker":
+                    return "/usr/bin/docker"
+                return actual_which(executable, *args, **kwargs)
+
+            def passing_checks(
+                _runner: object,
+                definitions: tuple[object, ...],
+                _cwd: Path,
+                *,
+                allow_host: bool = False,
+            ) -> tuple[CheckResult, ...]:
+                del allow_host
+                check_calls.append(definitions)
+                return tuple(
+                    CheckResult(
+                        definition.id,
+                        True,
+                        0,
+                        "",
+                        "",
+                        0.01,
+                        "PASS",
+                        container_image=definition.container_image,
+                    )
+                    for definition in definitions
+                )
+
+            with (
+                mock.patch(
+                    "ralph_hardened.orchestrator.subprocess.run",
+                    side_effect=run_with_image_inspect,
+                ),
+                mock.patch(
+                    "ralph_hardened.orchestrator.shutil.which",
+                    side_effect=which_with_docker,
+                ),
+                mock.patch.object(
+                    CheckRunner,
+                    "run_all",
+                    autospec=True,
+                    side_effect=passing_checks,
+                ),
+            ):
+                first = Orchestrator(options, FixtureProvider("write-app")).run()
+                self.assertEqual(first.reason, "BLOCKED_VERIFIER")
+                state = json.loads((first.run_dir / "run.json").read_text(encoding="utf-8"))
+                blocked_tree = state["stories"]["US-001"]["pendingEvidence"]["evaluatedTree"]
+                evidence = root / "browser.json"
+                evidence.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "evidence": [
+                                {
+                                    "storyId": "US-001",
+                                    "status": "PASS",
+                                    "evaluatedTree": blocked_tree,
+                                    "verifier": "independent-browser",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                check_calls.clear()
+                resumed = Orchestrator(
+                    self.make_options(
+                        root,
+                        repo,
+                        max_iterations=2,
+                        browser_evidence=evidence,
+                        resume_run=first.run_dir,
+                    ),
+                    SecondStoryProvider(),
+                ).run()
+
+            self.assertEqual(resumed.reason, "FINAL_BROWSER_EVIDENCE_STALE")
+            blocked_final_checks = [
+                definition
+                for definitions in check_calls
+                for definition in definitions
+                if definition.id == "required"
+            ]
+            self.assertTrue(blocked_final_checks)
+            self.assertTrue(
+                all(definition.container_image == image_id for definition in blocked_final_checks)
+            )
+
+    def test_final_revalidation_rejects_workspace_and_index_mutation(self) -> None:
+        mutators = {
+            "workspace": (
+                "from pathlib import Path; "
+                "Path('validator-side-effect.txt').write_text('bad\\n') "
+                "if Path('second.txt').exists() else None"
+            ),
+            "index": (
+                "import subprocess; from pathlib import Path; "
+                "subprocess.run(['git', 'read-tree', 'HEAD^'], check=True) "
+                "if Path('second.txt').exists() else None"
+            ),
+        }
+        for mutation, command in mutators.items():
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                repo = root / "repo"
+                init_repo(repo)
+                options = self.make_options(root, repo, max_iterations=2)
+                config = json.loads(options.config_path.read_text(encoding="utf-8"))
+                config["checks"]["required"]["argv"] = ["python3", "-c", command]
+                config["checks"]["second"] = {
+                    "argv": ["python3", "-c", "from pathlib import Path; assert Path('second.txt').exists()"],
+                    "timeoutSeconds": 5,
+                }
+                options.config_path.write_text(json.dumps(config), encoding="utf-8")
+                payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+                second = dict(payload["userStories"][0])
+                second.update(
+                    {
+                        "id": "US-002",
+                        "title": "Second story",
+                        "priority": 2,
+                        "allowedPaths": ["second.txt"],
+                        "requiredChecks": ["second"],
+                        "dependsOn": ["US-001"],
+                    }
+                )
+                payload["userStories"].append(second)
+                options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+                result = Orchestrator(options, FixtureProvider("write-sequential")).run()
+                self.assertEqual(result.outcome, RunOutcome.FAILED)
+                self.assertEqual(result.reason, "FINAL_VALIDATOR_MUTATED_WORKSPACE")
+
+    def test_final_revalidation_rejects_malformed_pass_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "title": "Second story",
+                    "priority": 2,
+                    "allowedPaths": ["second.txt"],
+                    "dependsOn": ["US-001"],
+                    "requiresBrowser": True,
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            first = Orchestrator(options, FixtureProvider("write-sequential")).run()
+            self.assertEqual(first.reason, "BLOCKED_VERIFIER")
+            state_path = first.run_dir / "run.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            blocked_tree = state["stories"]["US-002"]["pendingEvidence"]["evaluatedTree"]
+            state["stories"]["US-001"]["evidence"] = []
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            evidence = root / "browser.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "evidence": [
+                            {
+                                "storyId": "US-002",
+                                "status": "PASS",
+                                "evaluatedTree": blocked_tree,
+                                "verifier": "independent-browser",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            resumed = Orchestrator(
+                self.make_options(
+                    root,
+                    repo,
+                    max_iterations=2,
+                    browser_evidence=evidence,
+                    resume_run=first.run_dir,
+                ),
+                FixtureProvider("nonzero"),
+            ).run()
+            self.assertEqual(resumed.outcome, RunOutcome.FAILED)
+            self.assertEqual(resumed.reason, "FINAL_EVIDENCE_INVALID")
 
     def test_validator_immutable_paths_apply_across_all_stories(self) -> None:
         class ValidatorMutatingProvider(Provider):
