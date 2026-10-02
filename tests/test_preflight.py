@@ -14,6 +14,16 @@ from tests.helpers import prd_payload, write_config, write_prd
 
 
 class PreflightTests(unittest.TestCase):
+    def test_unknown_check_policy_key_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = write_config(root / "config.json")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["checks"]["required"]["immutablePath"] = ["tests/**"]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(PreflightError, "unsupported fields.*immutablePath"):
+                load_config(path)
+
     def test_nul_in_check_argument_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

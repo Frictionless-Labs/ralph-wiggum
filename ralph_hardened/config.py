@@ -15,6 +15,18 @@ _SENSITIVE_ENVIRONMENT_KEY = re.compile(
     r"TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|API_?KEY", re.IGNORECASE
 )
 _CONTAINER_IMAGE = re.compile(r"^[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$")
+_CHECK_FIELDS = frozenset(
+    {
+        "argv",
+        "timeoutSeconds",
+        "kind",
+        "environment",
+        "immutablePaths",
+        "containerImage",
+        "network",
+        "scratchMounts",
+    }
+)
 
 
 def _read_object(path: Path, content: bytes | None = None) -> dict[str, Any]:
@@ -46,6 +58,11 @@ def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
             raise PreflightError("check ids must be non-empty strings")
         if not isinstance(definition, dict):
             raise PreflightError(f"check {check_id!r} must be an object")
+        unsupported_fields = sorted(set(definition) - _CHECK_FIELDS)
+        if unsupported_fields:
+            raise PreflightError(
+                f"check {check_id!r} has unsupported fields: {', '.join(unsupported_fields)}"
+            )
         argv = definition.get("argv")
         if (
             not isinstance(argv, list)
