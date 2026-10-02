@@ -495,6 +495,16 @@ class Orchestrator:
             for path in story_state["evidence"].get("changedPaths", ())
             if isinstance(path, str)
         }
+        immutable_paths = tuple(
+            sorted(
+                {
+                    pattern
+                    for story in prd.stories
+                    for check_id in story.required_checks
+                    for pattern in config.checks[check_id].immutable_paths
+                }
+            )
+        )
         iterations = sum(
             story_state["status"] != "PENDING"
             for story_state in store.state["stories"].values()
@@ -523,11 +533,6 @@ class Orchestrator:
                         return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                     definitions = tuple(
                         config.checks[check_id] for check_id in story.required_checks
-                    )
-                    immutable_paths = tuple(
-                        pattern
-                        for definition in definitions
-                        for pattern in definition.immutable_paths
                     )
                     try:
                         current_manifest = workspace.validate_manifest(
@@ -616,9 +621,6 @@ class Orchestrator:
                 store.transition_story(story.id, "RUNNING", attempt=1)
                 expected_head = workspace.head()
                 definitions = tuple(config.checks[check_id] for check_id in story.required_checks)
-                immutable_paths = tuple(
-                    pattern for definition in definitions for pattern in definition.immutable_paths
-                )
                 ignored_before = workspace.ignored_digest()
                 for attempt in range(1, self.options.max_attempts + 1):
                     active_attempt = attempt
@@ -874,6 +876,39 @@ class Orchestrator:
                     "evaluatedTree": final_tree,
                     "checks": _check_evidence(checks),
                 }
+                if story.requires_browser:
+                    browser_result = next(
+                        (
+                            result
+                            for definition, result in zip(definitions, checks)
+                            if definition.kind == "browser" and result.passed
+                        ),
+                        None,
+                    )
+                    final_browser = (
+                        {
+                            "storyId": story.id,
+                            "status": "PASS",
+                            "evaluatedTree": final_tree,
+                            "verifier": browser_result.id,
+                        }
+                        if browser_result is not None
+                        else _browser_evidence_for_story(
+                            self.options.browser_evidence, story.id, final_tree
+                        )
+                    )
+                    if final_browser is None:
+                        reason = "FINAL_BROWSER_EVIDENCE_STALE"
+                        store.transition_story(
+                            story.id,
+                            "FAIL",
+                            attempt=int(story_state.get("attempts", 0)),
+                            evidence=evidence,
+                            reason=reason,
+                        )
+                        store.set_run_status("FAILED", reason)
+                        return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+                    evidence["browser"] = final_browser
                 store._write_state()
                 if any(not check.passed for check in checks):
                     reason = "FINAL_REVALIDATION_FAILED"

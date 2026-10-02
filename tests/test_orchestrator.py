@@ -963,6 +963,118 @@ class OrchestratorTests(unittest.TestCase):
                 "git", "write-tree", cwd=Path(state["worktreePath"])
             ).stdout.strip())
 
+    def test_validator_immutable_paths_apply_across_all_stories(self) -> None:
+        class ValidatorMutatingProvider(Provider):
+            name = "validator-mutating-fixture"
+            allows_host_checks = True
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
+                self.calls += 1
+                target = cwd / ("app.txt" if self.calls == 1 else "validator.py")
+                target.write_text("verified\n" if self.calls == 1 else "pass\n", encoding="utf-8")
+                return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            (repo / "validator.py").write_text(
+                "from pathlib import Path\nassert Path('app.txt').exists()\n",
+                encoding="utf-8",
+            )
+            run("git", "add", "validator.py", cwd=repo)
+            run("git", "commit", "-m", "test: add validator", cwd=repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            config = json.loads(options.config_path.read_text(encoding="utf-8"))
+            config["checks"]["required"]["immutablePaths"] = ["validator.py"]
+            config["checks"]["second"] = {
+                "argv": ["python3", "-c", "pass"],
+                "timeoutSeconds": 5,
+            }
+            options.config_path.write_text(json.dumps(config), encoding="utf-8")
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "title": "Second story",
+                    "priority": 2,
+                    "allowedPaths": ["validator.py"],
+                    "requiredChecks": ["second"],
+                    "dependsOn": ["US-001"],
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = Orchestrator(options, ValidatorMutatingProvider()).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "GIT_POLICY")
+
+    def test_external_browser_evidence_must_match_final_descendant_tree(self) -> None:
+        class SecondStoryProvider(Provider):
+            name = "second-story-fixture"
+            allows_host_checks = True
+
+            def run(self, prompt: str, cwd: Path, timeout_seconds: float) -> ProviderResult:
+                (cwd / "second.txt").write_text("second\n", encoding="utf-8")
+                return ProviderResult(ProviderOutcome.SUCCESS, "implemented", "", 0, 0.01)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            payload["userStories"][0]["requiresBrowser"] = True
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "title": "Second story",
+                    "priority": 2,
+                    "allowedPaths": ["second.txt"],
+                    "dependsOn": ["US-001"],
+                    "requiresBrowser": False,
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            first = Orchestrator(options, FixtureProvider("write-app")).run()
+            state = json.loads((first.run_dir / "run.json").read_text(encoding="utf-8"))
+            tree = state["stories"]["US-001"]["pendingEvidence"]["evaluatedTree"]
+            evidence = root / "browser.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "evidence": [
+                            {
+                                "storyId": "US-001",
+                                "status": "PASS",
+                                "evaluatedTree": tree,
+                                "verifier": "independent-browser",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = Orchestrator(
+                self.make_options(
+                    root,
+                    repo,
+                    max_iterations=2,
+                    browser_evidence=evidence,
+                    resume_run=first.run_dir,
+                ),
+                SecondStoryProvider(),
+            ).run()
+            self.assertEqual(result.outcome, RunOutcome.FAILED)
+            self.assertEqual(result.reason, "FINAL_BROWSER_EVIDENCE_STALE")
+
 
 if __name__ == "__main__":
     unittest.main()
