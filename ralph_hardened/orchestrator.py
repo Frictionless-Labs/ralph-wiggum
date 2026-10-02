@@ -317,6 +317,18 @@ class Orchestrator:
                 for story in prd.stories
                 if resume_store.state["stories"][story.id].get("status") == "PENDING"
             )
+            attempted_story_count = sum(
+                story_state.get("status") != "PENDING"
+                for story_state in resume_store.state["stories"].values()
+            )
+            if pending_stories and attempted_story_count < self.options.max_iterations:
+                stories_requiring_validation.extend(
+                    story
+                    for story in prd.stories
+                    if resume_store.state["stories"][story.id].get("status") == "BLOCKED"
+                    and resume_store.state["stories"][story.id].get("reason")
+                    == "BLOCKED_VERIFIER"
+                )
             blocked_trees = {
                 story_state.get("pendingEvidence", {}).get("evaluatedTree")
                 for story_state in resume_store.state["stories"].values()
@@ -862,11 +874,22 @@ class Orchestrator:
             for story in prd.stories:
                 story_state = store.state["stories"][story.id]
                 evidence = story_state.get("evidence")
-                if not isinstance(evidence, dict) or evidence.get("evaluatedTree") == final_tree:
+                if not isinstance(evidence, dict):
+                    reason = "FINAL_EVIDENCE_INVALID"
+                    store.transition_story(
+                        story.id,
+                        "FAIL",
+                        attempt=int(story_state.get("attempts", 0)),
+                        reason=reason,
+                    )
+                    store.set_run_status("FAILED", reason)
+                    return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+                if evidence.get("evaluatedTree") == final_tree:
                     continue
                 definitions = tuple(
                     config.checks[check_id] for check_id in story.required_checks
                 )
+                final_workspace_digest = workspace.workspace_digest()
                 checks = CheckRunner().run_all(
                     definitions,
                     workspace.path,
@@ -876,6 +899,20 @@ class Orchestrator:
                     "evaluatedTree": final_tree,
                     "checks": _check_evidence(checks),
                 }
+                if (
+                    workspace.workspace_digest() != final_workspace_digest
+                    or workspace.index_tree() != final_tree
+                ):
+                    reason = "FINAL_VALIDATOR_MUTATED_WORKSPACE"
+                    store.transition_story(
+                        story.id,
+                        "FAIL",
+                        attempt=int(story_state.get("attempts", 0)),
+                        evidence=evidence,
+                        reason=reason,
+                    )
+                    store.set_run_status("FAILED", reason)
+                    return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                 if story.requires_browser:
                     browser_result = next(
                         (

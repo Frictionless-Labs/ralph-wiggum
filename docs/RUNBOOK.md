@@ -128,6 +128,8 @@ For each PASS, confirm the run/story/attempt, PRD/config digests, source SHA, ch
 | `PRIOR_STORY_PATH_CHANGED` / exit `4` | A later story changed a path already owned by PASS evidence | Combine the dependent work into one story or use a new run from the verified commit |
 | `FINAL_REVALIDATION_FAILED` / exit `4` | An earlier story's checks fail on the final descendant tree | Repair the cross-story regression; never retain COMPLETE |
 | `FINAL_BROWSER_EVIDENCE_STALE` / exit `4` | Browser evidence does not bind the final descendant tree | Replan so browser verification runs on the final tree; never reuse stale UI evidence |
+| `FINAL_EVIDENCE_INVALID` / exit `4` | A PASS story lacks structured tree-bound evidence | Preserve the run, inspect state integrity, and start a new run from the intended HEAD |
+| `FINAL_VALIDATOR_MUTATED_WORKSPACE` / exit `4` | A final check changed the workspace, HEAD, or index | Repair the validator confinement or command; never accept its result |
 | `USER_CANCELLED` / exit `4` | Execution was interrupted | Inspect preserved state/worktree; start a new run from the intended HEAD |
 
 ### 5. Recovery and restart
