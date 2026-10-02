@@ -43,6 +43,29 @@ class StateTests(unittest.TestCase):
             with self.assertRaisesRegex(StateError, "invalid run state"):
                 RunStore.load(store.run_dir)
 
+    def test_resume_load_rejects_hierarchy_that_became_shared_writable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            state_root = root / "state"
+            store = RunStore.create(
+                state_root, write_prd(root / "prd.json"), "head", ["US-001"]
+            )
+            state_root.chmod(0o770)
+            with self.assertRaisesRegex(StateError, "unsafe state hierarchy"):
+                RunStore.load(store.run_dir)
+
+    def test_resume_lock_rejects_hierarchy_that_became_shared_writable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            state_root = root / "state"
+            store = RunStore.create(
+                state_root, write_prd(root / "prd.json"), "head", ["US-001"]
+            )
+            state_root.chmod(0o770)
+            with self.assertRaisesRegex(StateError, "unsafe state hierarchy"):
+                with lock_resumable_run(store.run_dir):
+                    self.fail("unsafe hierarchy acquired a resume lock")
+
     def test_saved_run_id_must_match_its_directory(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -130,6 +153,51 @@ class StateTests(unittest.TestCase):
             RunStore.create(state_root, write_prd(root / "prd.json"), "head", ["US-001"])
             after = state_root.stat().st_mode & 0o777
             self.assertEqual(after, before)
+
+    def test_state_root_writable_by_another_principal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            state_root = root / "shared-state"
+            state_root.mkdir(mode=0o770)
+            state_root.chmod(0o770)
+            with self.assertRaisesRegex(StateError, "unsafe state hierarchy"):
+                RunStore.create(
+                    state_root,
+                    write_prd(root / "prd.json"),
+                    "head",
+                    ["US-001"],
+                )
+
+    def test_state_root_below_replaceable_parent_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            replaceable_parent = root / "replaceable"
+            replaceable_parent.mkdir(mode=0o777)
+            replaceable_parent.chmod(0o777)
+            state_root = replaceable_parent / "state"
+            state_root.mkdir(mode=0o700)
+            with self.assertRaisesRegex(StateError, "unsafe state hierarchy"):
+                RunStore.create(
+                    state_root,
+                    write_prd(root / "prd.json"),
+                    "head",
+                    ["US-001"],
+                )
+
+    def test_state_root_below_sticky_shared_parent_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            sticky_parent = root / "sticky"
+            sticky_parent.mkdir(mode=0o1777)
+            sticky_parent.chmod(0o1777)
+            state_root = sticky_parent / "state"
+            store = RunStore.create(
+                state_root,
+                write_prd(root / "prd.json"),
+                "head",
+                ["US-001"],
+            )
+            self.assertEqual(store.run_dir.stat().st_mode & 0o777, 0o700)
 
     def test_symlinked_state_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
