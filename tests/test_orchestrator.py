@@ -1267,6 +1267,70 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(resumed.outcome, RunOutcome.FAILED)
             self.assertEqual(resumed.reason, "FINAL_EVIDENCE_INVALID")
 
+    def test_final_revalidation_verifies_persisted_commit_and_metrics(self) -> None:
+        corruptions = {
+            "commit": lambda evidence: evidence.update({"commit": "f" * 40}),
+            "metrics": lambda evidence: evidence.update(
+                {"providerMetrics": {"costUsd": -1, "unsupported": 1}}
+            ),
+        }
+        for field, corrupt in corruptions.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                repo = root / "repo"
+                init_repo(repo)
+                options = self.make_options(root, repo, max_iterations=2)
+                payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+                second = dict(payload["userStories"][0])
+                second.update(
+                    {
+                        "id": "US-002",
+                        "title": "Second story",
+                        "priority": 2,
+                        "allowedPaths": ["second.txt"],
+                        "dependsOn": ["US-001"],
+                        "requiresBrowser": True,
+                    }
+                )
+                payload["userStories"].append(second)
+                options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+                first = Orchestrator(options, FixtureProvider("write-sequential")).run()
+                self.assertEqual(first.reason, "BLOCKED_VERIFIER")
+                state_path = first.run_dir / "run.json"
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                blocked_tree = state["stories"]["US-002"]["pendingEvidence"]["evaluatedTree"]
+                corrupt(state["stories"]["US-001"]["evidence"])
+                state_path.write_text(json.dumps(state), encoding="utf-8")
+                browser = root / "browser.json"
+                browser.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "evidence": [
+                                {
+                                    "storyId": "US-002",
+                                    "status": "PASS",
+                                    "evaluatedTree": blocked_tree,
+                                    "verifier": "independent-browser",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                resumed = Orchestrator(
+                    self.make_options(
+                        root,
+                        repo,
+                        max_iterations=2,
+                        browser_evidence=browser,
+                        resume_run=first.run_dir,
+                    ),
+                    FixtureProvider("nonzero"),
+                ).run()
+                self.assertEqual(resumed.outcome, RunOutcome.FAILED)
+                self.assertEqual(resumed.reason, "FINAL_EVIDENCE_INVALID")
+
     def test_validator_immutable_paths_apply_across_all_stories(self) -> None:
         class ValidatorMutatingProvider(Provider):
             name = "validator-mutating-fixture"

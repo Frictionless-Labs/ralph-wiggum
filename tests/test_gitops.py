@@ -14,6 +14,27 @@ from tests.helpers import init_repo, run
 
 
 class GitWorkspaceTests(unittest.TestCase):
+    def test_manifest_rejects_nonportable_provider_paths(self) -> None:
+        invalid_names = ("bad\\name", "bad:name", "bad\nname", "bad\x7fname")
+        for name in invalid_names:
+            with self.subTest(name=repr(name)), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                repo = root / "source"
+                head = init_repo(repo)
+                workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+                baseline = workspace.workspace_inventory()
+                (workspace.path / name).write_text("unsafe\n", encoding="utf-8")
+                with self.assertRaisesRegex(GitPolicyError, "unsafe changed path"):
+                    workspace.validate_manifest(["**"], [], baseline_inventory=baseline)
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
+            with self.assertRaisesRegex(GitPolicyError, "unsafe changed path"):
+                workspace.validate_manifest(["**"], [], known_manifest=("bad-\udcff",))
+
     def test_materialization_rejects_case_and_unicode_path_collisions(self) -> None:
         collisions = (
             ("Dir/one.txt", "dir/two.txt"),
@@ -539,7 +560,7 @@ class GitWorkspaceTests(unittest.TestCase):
             head = init_repo(repo)
             workspace = GitWorkspace.create(repo, root / "state", "run-001", head)
             baseline = workspace.workspace_inventory()
-            adversarial = ":(exclude)literal.txt"
+            adversarial = "literal[1].txt"
             (workspace.path / adversarial).write_text("literal\n", encoding="utf-8")
             manifest = workspace.validate_manifest(
                 ["**"], [], baseline_inventory=baseline
