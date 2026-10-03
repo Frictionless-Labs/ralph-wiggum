@@ -30,6 +30,7 @@ _KEY_SHAPE = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b")
 _MAX_REFERENCE_FILE_BYTES = 32_768
 _MAX_REFERENCE_TOTAL_BYTES = 65_536
 _MAX_WORKER_BRIEF_BYTES = 131_072
+_DOCKER_INSPECT_TIMEOUT_SECONDS = 30.0
 _GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -508,20 +509,27 @@ class Orchestrator:
             if definition.container_image is not None:
                 if shutil.which("docker", path=safe_path) is None:
                     raise PreflightError("containerized checks require Docker")
-                image = subprocess.run(
-                    (
-                        "docker",
-                        "image",
-                        "inspect",
-                        "--format={{.Id}}",
-                        definition.container_image,
-                    ),
-                    env=build_safe_env(),
-                    check=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
+                try:
+                    image = subprocess.run(
+                        (
+                            "docker",
+                            "image",
+                            "inspect",
+                            "--format={{.Id}}",
+                            definition.container_image,
+                        ),
+                        env=build_safe_env(),
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=_DOCKER_INSPECT_TIMEOUT_SECONDS,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise PreflightError(
+                        "check container image inspection timed out: "
+                        f"{definition.container_image}"
+                    ) from exc
                 if image.returncode != 0:
                     raise PreflightError(
                         f"check container image unavailable: {definition.container_image}"
