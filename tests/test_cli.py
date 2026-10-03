@@ -166,6 +166,7 @@ class CliTests(unittest.TestCase):
         required = schema["properties"]["userStories"]["items"]["required"]
         self.assertIn("allowedPaths", required)
         self.assertIn("requiredChecks", required)
+        self.assertFalse(schema["properties"]["userStories"]["items"]["additionalProperties"])
 
 
 if __name__ == "__main__":

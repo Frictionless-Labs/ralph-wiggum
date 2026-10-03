@@ -985,6 +985,49 @@ class OrchestratorTests(unittest.TestCase):
                 "git", "write-tree", cwd=Path(state["worktreePath"])
             ).stdout.strip())
 
+    def test_final_browser_proof_preserves_original_tree_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo, max_iterations=2)
+            config = json.loads(options.config_path.read_text(encoding="utf-8"))
+            config["checks"]["required"]["kind"] = "browser"
+            config["checks"]["second"] = {
+                "argv": ["python3", "-c", "from pathlib import Path; assert Path('second.txt').exists()"],
+                "timeoutSeconds": 5,
+            }
+            options.config_path.write_text(json.dumps(config), encoding="utf-8")
+            payload = json.loads(options.prd_path.read_text(encoding="utf-8"))
+            payload["userStories"][0]["requiresBrowser"] = True
+            second = dict(payload["userStories"][0])
+            second.update(
+                {
+                    "id": "US-002",
+                    "title": "Second story",
+                    "priority": 2,
+                    "allowedPaths": ["second.txt"],
+                    "requiredChecks": ["second"],
+                    "dependsOn": ["US-001"],
+                    "requiresBrowser": False,
+                }
+            )
+            payload["userStories"].append(second)
+            options.prd_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = Orchestrator(options, FixtureProvider("write-sequential")).run()
+            self.assertEqual(result.outcome, RunOutcome.COMPLETE)
+            state = json.loads((result.run_dir / "run.json").read_text(encoding="utf-8"))
+            evidence = state["stories"]["US-001"]["evidence"]
+            self.assertEqual(evidence["browser"]["evaluatedTree"], evidence["evaluatedTree"])
+            self.assertEqual(
+                evidence["finalValidation"]["browser"]["evaluatedTree"],
+                evidence["finalValidation"]["evaluatedTree"],
+            )
+            self.assertNotEqual(
+                evidence["browser"]["evaluatedTree"],
+                evidence["finalValidation"]["browser"]["evaluatedTree"],
+            )
+
     def test_resumed_blocked_story_final_check_uses_resolved_image(self) -> None:
         class SecondStoryProvider(Provider):
             name = "second-story-fixture"

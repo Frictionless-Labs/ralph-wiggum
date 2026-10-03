@@ -135,6 +135,16 @@ class PreflightTests(unittest.TestCase):
                 with self.assertRaisesRegex(PreflightError, "unsafe allowed path"):
                     load_prd(root / "prd.json", config)
 
+    def test_duplicate_required_checks_fail_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = load_config(write_config(root / "config.json"))
+            path = write_prd(
+                root / "prd.json", requiredChecks=["required", "required"]
+            )
+            with self.assertRaisesRegex(PreflightError, "requiredChecks must be unique"):
+                load_prd(path, config)
+
     def test_legacy_passes_is_inert(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
