@@ -57,12 +57,17 @@ def provider_from_name(name: str) -> CommandProvider:
 def _resolve_paths(arguments: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
     package_root = Path(__file__).resolve().parent.parent
     repo = (arguments.repo or package_root).expanduser().resolve()
-    prd = (arguments.prd or repo / "prd.json").expanduser().resolve()
-    config = (arguments.config or repo / "ralph.config.json").expanduser().resolve()
+    if arguments.resume_run is not None:
+        resume_run = arguments.resume_run.expanduser().absolute()
+        prd = resume_run / "prd.snapshot.json"
+        config = resume_run / "config.snapshot.json"
+    else:
+        prd = (arguments.prd or repo / "prd.json").expanduser().resolve()
+        config = (arguments.config or repo / "ralph.config.json").expanduser().resolve()
     if arguments.state_dir is not None:
         state = arguments.state_dir
     elif arguments.resume_run is not None:
-        state = arguments.resume_run.expanduser().absolute().parent.parent
+        state = resume_run.parent.parent
     else:
         state = repo.parent / ".ralph-state" / repo.name
     state = state.expanduser()

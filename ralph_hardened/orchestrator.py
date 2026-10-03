@@ -222,6 +222,7 @@ def _valid_pass_evidence(
     config_digest: object,
     config: Any,
     workspace: GitWorkspace,
+    expected_base_sha: str,
 ) -> bool:
     if not isinstance(evidence, dict):
         return False
@@ -240,6 +241,7 @@ def _valid_pass_evidence(
         or attempt != story_attempts
         or evidence.get("prdDigest") != prd_digest
         or evidence.get("configDigest") != config_digest
+        or evidence.get("baseSha") != expected_base_sha
         or not isinstance(evidence.get("baseSha"), str)
         or _GIT_OBJECT_ID.fullmatch(evidence["baseSha"]) is None
         or evidence.get("providerOutcome") != ProviderOutcome.SUCCESS.value
@@ -668,7 +670,10 @@ class Orchestrator:
         active_story_id: Optional[str] = None
         active_attempt = 0
         try:
+            expected_base_sha = str(store.state.get("sourceHead", ""))
+            last_story: Optional[Story] = None
             for story in prd.stories:
+                last_story = story
                 story_state = store.state["stories"][story.id]
                 if story_state["status"] == "PASS":
                     continue
@@ -1027,6 +1032,7 @@ class Orchestrator:
                     config_digest=store.state.get("configDigest"),
                     config=config,
                     workspace=workspace,
+                    expected_base_sha=expected_base_sha,
                 ):
                     reason = "FINAL_EVIDENCE_INVALID"
                     store.transition_story(
@@ -1038,6 +1044,7 @@ class Orchestrator:
                     store.set_run_status("FAILED", reason)
                     return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
                 assert isinstance(evidence, dict)
+                expected_base_sha = str(evidence["commit"])
                 if evidence.get("evaluatedTree") == final_tree:
                     continue
                 definitions = tuple(
@@ -1112,6 +1119,19 @@ class Orchestrator:
                     )
                     store.set_run_status("FAILED", reason)
                     return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+            if last_story is None or expected_base_sha != workspace.head():
+                reason = "FINAL_EVIDENCE_INVALID"
+                if last_story is not None:
+                    last_state = store.state["stories"][last_story.id]
+                    store.transition_story(
+                        last_story.id,
+                        "FAIL",
+                        attempt=int(last_state.get("attempts", 0)),
+                        evidence=last_state.get("evidence"),
+                        reason=reason,
+                    )
+                store.set_run_status("FAILED", reason)
+                return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
             store.set_run_status("COMPLETE")
             return OrchestrationResult(RunOutcome.COMPLETE, "VERIFIED_COMPLETE", store.run_dir)
         except KeyboardInterrupt:

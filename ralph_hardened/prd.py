@@ -69,10 +69,19 @@ def _string_array(raw: dict[str, Any], field: str, context: str, required: bool 
 
 
 def _validate_allowed_path(value: str, story_id: str) -> None:
-    if "\\" in value or "\x00" in value or value.startswith("/"):
+    if (
+        "\\" in value
+        or ":" in value
+        or value.startswith("/")
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
         raise PreflightError(f"story {story_id} has unsafe allowed path: {value}")
+    try:
+        value.encode("utf-8", "strict")
+    except UnicodeEncodeError as exc:
+        raise PreflightError(f"story {story_id} has unsafe allowed path: {value}") from exc
     path = PurePosixPath(value)
-    if value in {"", "."} or ".." in path.parts:
+    if value in {"", "."} or ".." in path.parts or str(path) != value:
         raise PreflightError(f"story {story_id} has unsafe allowed path: {value}")
 
 
