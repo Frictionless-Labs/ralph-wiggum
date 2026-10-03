@@ -53,6 +53,9 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("SOCK_STREAM", netcheck)
         self.assertIn("SOCK_DGRAM", netcheck)
         self.assertIn("O_NONBLOCK", netcheck)
+        self.assertNotIn("ENETUNREACH", netcheck)
+        self.assertNotIn("EHOSTUNREACH", netcheck)
+        self.assertNotIn("ENETDOWN", netcheck)
 
     def test_provider_preflight_uses_disposable_workspace(self) -> None:
         text = (ROOT / "scripts" / "run-codex-provider.sh").read_text(encoding="utf-8")
@@ -65,6 +68,8 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertLess(rebind, sandbox)
         self.assertIn('--volume "$workspace_path:/workspace:rw"', text)
         self.assertNotIn('--volume "$PWD:/workspace:rw"', text)
+        self.assertIn('${TMPDIR:-/tmp}', text)
+        self.assertNotIn("/private/tmp/ralph-provider-preflight", text)
 
     def test_ci_and_pages_workflows_are_sha_pinned_and_gated(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
