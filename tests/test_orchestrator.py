@@ -197,6 +197,43 @@ class OrchestratorTests(unittest.TestCase):
             self.assertFalse(marker.exists())
             self.assertFalse(options.state_dir.exists())
 
+    def test_container_image_inspection_timeout_fails_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "repo"
+            init_repo(repo)
+            options = self.make_options(root, repo)
+            config_path = write_config(options.config_path)
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            payload["checks"]["required"]["containerImage"] = "validator:test"
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            provider = FixtureProvider("write-app")
+            real_run = subprocess.run
+            real_which = shutil.which
+
+            def bounded_run(argv: object, *args: object, **kwargs: object) -> object:
+                if tuple(argv)[:3] == ("docker", "image", "inspect"):  # type: ignore[arg-type]
+                    self.assertEqual(kwargs.get("timeout"), 30.0)
+                    raise subprocess.TimeoutExpired(argv, 30.0)
+                return real_run(argv, *args, **kwargs)  # type: ignore[arg-type]
+
+            def docker_available(name: str, **kwargs: object) -> str | None:
+                if name == "docker":
+                    return "/usr/bin/docker"
+                return real_which(name, **kwargs)
+
+            with mock.patch(
+                "ralph_hardened.orchestrator.subprocess.run", side_effect=bounded_run
+            ), mock.patch(
+                "ralph_hardened.orchestrator.shutil.which", side_effect=docker_available
+            ):
+                with self.assertRaisesRegex(
+                    PreflightError, "container image inspection timed out.*validator:test"
+                ):
+                    Orchestrator(options, provider).run()
+            self.assertEqual(provider.calls, 0)
+            self.assertFalse(options.state_dir.exists())
+
     def test_untracked_relative_check_is_not_accepted_from_live_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
