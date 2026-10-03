@@ -54,6 +54,18 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("SOCK_DGRAM", netcheck)
         self.assertIn("O_NONBLOCK", netcheck)
 
+    def test_provider_preflight_uses_disposable_workspace(self) -> None:
+        text = (ROOT / "scripts" / "run-codex-provider.sh").read_text(encoding="utf-8")
+        branch = text.index("if [ \"${1:-}\" = '--preflight' ]")
+        disposable = text.index("preflight_workspace=$(mktemp -d", branch)
+        rebind = text.index('workspace_path="$preflight_workspace"', disposable)
+        sandbox = text.index("check_sandbox </dev/null", rebind)
+        self.assertLess(branch, disposable)
+        self.assertLess(disposable, rebind)
+        self.assertLess(rebind, sandbox)
+        self.assertIn('--volume "$workspace_path:/workspace:rw"', text)
+        self.assertNotIn('--volume "$PWD:/workspace:rw"', text)
+
     def test_ci_and_pages_workflows_are_sha_pinned_and_gated(self) -> None:
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
@@ -89,6 +101,8 @@ class RepositoryPolicyTests(unittest.TestCase):
             self.assertTrue(story["allowedPaths"])
             self.assertTrue(story["requiredChecks"])
             self.assertNotIn("passes", story)
+        self.assertFalse(payload["userStories"][0].get("requiresBrowser", False))
+        self.assertTrue(payload["userStories"][-1]["requiresBrowser"])
 
     def test_flowchart_build_uses_production_base(self) -> None:
         config = json.loads((ROOT / "ralph.config.json").read_text(encoding="utf-8"))
