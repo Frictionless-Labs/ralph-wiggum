@@ -10,6 +10,21 @@ from .models import PRD, RalphConfig, Story
 
 
 MAX_REFERENCE_COUNT = 8
+_STORY_FIELDS = frozenset(
+    {
+        "id",
+        "title",
+        "description",
+        "acceptanceCriteria",
+        "priority",
+        "allowedPaths",
+        "requiredChecks",
+        "dependsOn",
+        "requiresBrowser",
+        "references",
+        "passes",
+    }
+)
 _SECRET_REFERENCE_NAMES = {
     ".aws",
     ".dockercfg",
@@ -130,6 +145,12 @@ def load_prd(path: Path, config: RalphConfig, content: bytes | None = None) -> P
     for index, item in enumerate(stories_raw):
         if not isinstance(item, dict):
             raise PreflightError(f"story at index {index} must be an object")
+        unsupported_fields = sorted(set(item) - _STORY_FIELDS)
+        if unsupported_fields:
+            raise PreflightError(
+                f"story at index {index} has unsupported fields: "
+                + ", ".join(unsupported_fields)
+            )
         story_id = _required_string(item, "id", f"story at index {index}")
         if any(ord(character) < 32 or ord(character) == 127 for character in story_id):
             raise PreflightError(f"story at index {index} id contains control characters")

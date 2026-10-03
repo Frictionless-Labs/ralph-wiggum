@@ -30,6 +30,8 @@ _KEY_SHAPE = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b")
 _MAX_REFERENCE_FILE_BYTES = 32_768
 _MAX_REFERENCE_TOTAL_BYTES = 65_536
 _MAX_WORKER_BRIEF_BYTES = 131_072
+_GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _redact_diagnostic(value: str) -> str:
@@ -208,6 +210,123 @@ def _browser_evidence_for_story(
                 "verifier": entry["verifier"],
             }
     return None
+
+
+def _valid_pass_evidence(
+    evidence: object,
+    *,
+    run_id: str,
+    story: Story,
+    story_attempts: object,
+    prd_digest: object,
+    config_digest: object,
+    config: Any,
+) -> bool:
+    if not isinstance(evidence, dict):
+        return False
+    attempt = evidence.get("attempt")
+    changed_paths = evidence.get("changedPaths")
+    checks = evidence.get("checks")
+    evaluated_tree = evidence.get("evaluatedTree")
+    commit = evidence.get("commit")
+    commit_tree = evidence.get("commitTree")
+    if (
+        evidence.get("runId") != run_id
+        or evidence.get("storyId") != story.id
+        or not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or attempt <= 0
+        or attempt != story_attempts
+        or evidence.get("prdDigest") != prd_digest
+        or evidence.get("configDigest") != config_digest
+        or not isinstance(evidence.get("baseSha"), str)
+        or _GIT_OBJECT_ID.fullmatch(evidence["baseSha"]) is None
+        or evidence.get("providerOutcome") != ProviderOutcome.SUCCESS.value
+        or not isinstance(evidence.get("providerMetrics"), dict)
+        or not isinstance(changed_paths, list)
+        or not changed_paths
+        or any(
+            not isinstance(path, str)
+            or not path
+            or not matches_path_patterns(path, story.allowed_paths)
+            for path in changed_paths
+        )
+        or not isinstance(evaluated_tree, str)
+        or _GIT_OBJECT_ID.fullmatch(evaluated_tree) is None
+        or not isinstance(commit, str)
+        or _GIT_OBJECT_ID.fullmatch(commit) is None
+        or commit_tree != evaluated_tree
+        or evidence.get("treeIdentityVerified") is not True
+        or not isinstance(checks, list)
+        or len(checks) != len(story.required_checks)
+    ):
+        return False
+    expected_checks = {check_id: config.checks[check_id] for check_id in story.required_checks}
+    seen_checks: set[str] = set()
+    for check in checks:
+        if not isinstance(check, dict):
+            return False
+        check_id = check.get("id")
+        if check_id not in expected_checks or check_id in seen_checks:
+            return False
+        seen_checks.add(check_id)
+        definition = expected_checks[check_id]
+        if (
+            check.get("outcome") != "PASS"
+            or check.get("exitCode") != 0
+            or not isinstance(check.get("durationSeconds"), (int, float))
+            or isinstance(check.get("durationSeconds"), bool)
+            or not math.isfinite(check["durationSeconds"])
+            or check["durationSeconds"] < 0
+            or any(
+                not isinstance(check.get(field), int)
+                or isinstance(check.get(field), bool)
+                or check[field] < 0
+                for field in ("stdoutBytes", "stderrBytes")
+            )
+            or any(
+                not isinstance(check.get(field), str)
+                or _SHA256.fullmatch(check[field]) is None
+                for field in ("stdoutSha256", "stderrSha256")
+            )
+            or any(
+                not isinstance(check.get(field), bool)
+                for field in ("stdoutTruncated", "stderrTruncated")
+            )
+            or any(
+                not isinstance(check.get(field), str)
+                for field in ("stdoutTail", "stderrTail")
+            )
+            or (
+                definition.container_image is None
+                and check.get("containerImage") is not None
+            )
+            or (
+                definition.container_image is not None
+                and (
+                    not isinstance(check.get("containerImage"), str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", check["containerImage"])
+                    is None
+                )
+            )
+        ):
+            return False
+    if seen_checks != set(expected_checks):
+        return False
+    browser = evidence.get("browser")
+    if story.requires_browser:
+        if (
+            not isinstance(browser, dict)
+            or browser.get("storyId") != story.id
+            or browser.get("status") != "PASS"
+            or browser.get("evaluatedTree") != evaluated_tree
+            or not isinstance(browser.get("verifier"), str)
+            or not browser["verifier"].strip()
+        ):
+            return False
+    elif browser is not None:
+        return False
+    return True
 
 
 class Orchestrator:
@@ -878,7 +997,15 @@ class Orchestrator:
             for story in prd.stories:
                 story_state = store.state["stories"][story.id]
                 evidence = story_state.get("evidence")
-                if not isinstance(evidence, dict):
+                if not _valid_pass_evidence(
+                    evidence,
+                    run_id=store.run_id,
+                    story=story,
+                    story_attempts=story_state.get("attempts"),
+                    prd_digest=store.state.get("prdDigest"),
+                    config_digest=store.state.get("configDigest"),
+                    config=config,
+                ):
                     reason = "FINAL_EVIDENCE_INVALID"
                     store.transition_story(
                         story.id,
@@ -888,6 +1015,7 @@ class Orchestrator:
                     )
                     store.set_run_status("FAILED", reason)
                     return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
+                assert isinstance(evidence, dict)
                 if evidence.get("evaluatedTree") == final_tree:
                     continue
                 definitions = tuple(

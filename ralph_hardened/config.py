@@ -42,7 +42,7 @@ def _safe_path_pattern(value: object, *, forbid_git: bool = False) -> bool:
     ):
         return False
     parts = PurePosixPath(value).parts
-    if ".." in parts:
+    if ".." in parts or str(PurePosixPath(value)) != value:
         return False
     return not forbid_git or all(part.lower() != ".git" for part in parts)
 
