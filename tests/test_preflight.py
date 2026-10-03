@@ -24,6 +24,16 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(PreflightError, "unsupported fields.*immutablePath"):
                 load_config(path)
 
+    def test_unknown_root_policy_key_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = write_config(root / "config.json")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["protectedPath"] = payload.pop("protectedPaths")
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(PreflightError, "unsupported root fields.*protectedPath"):
+                load_config(path)
+
     def test_nul_in_check_argument_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -167,6 +167,35 @@ class GitWorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(PreflightError, "worktrees root must be a real directory"):
                 GitWorkspace.create(repo, state, "run-001", head)
 
+    def test_replaceable_worktrees_root_is_rejected_on_create(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            state = root / "state"
+            worktrees = state / "worktrees"
+            worktrees.mkdir(parents=True, mode=0o777)
+            worktrees.chmod(0o777)
+            with self.assertRaisesRegex(PreflightError, "unsafe worktrees root"):
+                GitWorkspace.create(repo, state, "run-001", head)
+
+    def test_replaceable_worktree_hierarchy_is_rejected_on_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo = root / "source"
+            head = init_repo(repo)
+            state = root / "state"
+            workspace = GitWorkspace.create(repo, state, "run-001", head)
+            (state / "worktrees").chmod(0o777)
+            with self.assertRaisesRegex(PreflightError, "unsafe worktrees root"):
+                GitWorkspace.open(
+                    repo,
+                    state,
+                    "run-001",
+                    head,
+                    workspace.baseline_state(),
+                )
+
     def test_dirty_parent_changes_do_not_enter_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
