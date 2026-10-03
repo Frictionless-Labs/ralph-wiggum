@@ -432,7 +432,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(story["status"], "PASS")
             self.assertEqual(story["evidence"]["evaluatedTree"], evaluated_tree)
 
-    def test_evidence_only_resume_does_not_require_validator_image(self) -> None:
+    def test_evidence_only_resume_rejects_validator_policy_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             repo = root / "repo"
@@ -475,7 +475,8 @@ class OrchestratorTests(unittest.TestCase):
                 ),
                 FixtureProvider("nonzero"),
             ).run()
-            self.assertEqual(resumed.outcome, RunOutcome.COMPLETE)
+            self.assertEqual(resumed.outcome, RunOutcome.FAILED)
+            self.assertEqual(resumed.reason, "FINAL_EVIDENCE_INVALID")
 
     def test_resume_worktree_reopen_failure_is_a_preflight_error(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -1054,6 +1055,8 @@ class OrchestratorTests(unittest.TestCase):
                         "",
                         0.01,
                         "PASS",
+                        stdout_sha256=__import__("hashlib").sha256(b"").hexdigest(),
+                        stderr_sha256=__import__("hashlib").sha256(b"").hexdigest(),
                         container_image=definition.container_image,
                     )
                     for definition in definitions
@@ -1189,7 +1192,7 @@ class OrchestratorTests(unittest.TestCase):
             state_path = first.run_dir / "run.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
             blocked_tree = state["stories"]["US-002"]["pendingEvidence"]["evaluatedTree"]
-            state["stories"]["US-001"]["evidence"] = []
+            state["stories"]["US-001"]["evidence"] = {"evaluatedTree": blocked_tree}
             state_path.write_text(json.dumps(state), encoding="utf-8")
             evidence = root / "browser.json"
             evidence.write_text(

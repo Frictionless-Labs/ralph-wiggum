@@ -34,6 +34,26 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(PreflightError, "unsupported root fields.*protectedPath"):
                 load_config(path)
 
+    def test_unknown_story_control_key_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = load_config(write_config(root / "config.json"))
+            path = write_prd(root / "prd.json", requiresBrower=True)
+            with self.assertRaisesRegex(PreflightError, "unsupported fields.*requiresBrower"):
+                load_prd(path, config)
+
+    def test_noncanonical_path_patterns_fail_closed(self) -> None:
+        cases = ("./.github/workflows/**", ".github//workflows/**")
+        for pattern in cases:
+            with self.subTest(pattern=pattern), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                path = write_config(root / "config.json")
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload["protectedPaths"] = [pattern]
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaisesRegex(PreflightError, "protectedPaths"):
+                    load_config(path)
+
     def test_nul_in_check_argument_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
