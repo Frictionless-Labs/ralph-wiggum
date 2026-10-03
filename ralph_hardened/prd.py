@@ -164,6 +164,8 @@ def load_prd(path: Path, config: RalphConfig, content: bytes | None = None) -> P
         for allowed_path in allowed_paths:
             _validate_allowed_path(allowed_path, story_id)
         required_checks = _string_array(item, "requiredChecks", f"story {story_id}")
+        if len(required_checks) != len(set(required_checks)):
+            raise PreflightError(f"story {story_id} requiredChecks must be unique")
         for check_id in required_checks:
             if check_id not in config.checks:
                 raise PreflightError(f"story {story_id} references unknown required check: {check_id}")

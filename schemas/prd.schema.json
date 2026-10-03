@@ -12,7 +12,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "required": [
           "id",
           "title",
@@ -40,6 +40,7 @@
           "requiredChecks": {
             "type": "array",
             "minItems": 1,
+            "uniqueItems": true,
             "items": {"type": "string", "minLength": 1}
           },
           "dependsOn": {

@@ -1077,7 +1077,7 @@ class Orchestrator:
                         )
                         store.set_run_status("FAILED", reason)
                         return OrchestrationResult(RunOutcome.FAILED, reason, store.run_dir)
-                    evidence["browser"] = final_browser
+                    evidence["finalValidation"]["browser"] = final_browser
                 store._write_state()
                 if any(not check.passed for check in checks):
                     reason = "FINAL_REVALIDATION_FAILED"
