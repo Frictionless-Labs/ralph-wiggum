@@ -15,9 +15,19 @@ from tests.helpers import init_repo, write_config, write_prd
 class CliTests(unittest.TestCase):
     def test_resume_run_infers_its_state_root(self) -> None:
         arguments = build_parser().parse_args(
-            ["--resume-run", "/var/tmp/ralph-state/runs/run-001"]
+            [
+                "--resume-run",
+                "/var/tmp/ralph-state/runs/run-001",
+                "--prd",
+                "/tmp/live-prd.json",
+                "--config",
+                "/tmp/live-config.json",
+            ]
         )
-        self.assertEqual(_resolve_paths(arguments)[3], Path("/var/tmp/ralph-state"))
+        _, prd, config, state = _resolve_paths(arguments)
+        self.assertEqual(state, Path("/var/tmp/ralph-state"))
+        self.assertEqual(prd, Path("/var/tmp/ralph-state/runs/run-001/prd.snapshot.json"))
+        self.assertEqual(config, Path("/var/tmp/ralph-state/runs/run-001/config.snapshot.json"))
 
     def test_state_path_is_not_resolved_before_symlink_validation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

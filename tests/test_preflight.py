@@ -135,6 +135,16 @@ class PreflightTests(unittest.TestCase):
                 with self.assertRaisesRegex(PreflightError, "unsafe allowed path"):
                     load_prd(root / "prd.json", config)
 
+    def test_noncanonical_allowed_path_patterns_fail_closed(self) -> None:
+        cases = ("./app.txt", "app//*.txt", "drive:path", "bad\npath")
+        for pattern in cases:
+            with self.subTest(pattern=repr(pattern)), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                config = load_config(write_config(root / "config.json"))
+                path = write_prd(root / "prd.json", allowedPaths=[pattern])
+                with self.assertRaisesRegex(PreflightError, "unsafe allowed path"):
+                    load_prd(path, config)
+
     def test_duplicate_required_checks_fail_before_execution(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
