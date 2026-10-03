@@ -10,11 +10,12 @@ auth_path="${HOME:?HOME is required}/.codex/auth.json"
 container_name="ralph-provider-$$"
 workspace_path=$PWD
 preflight_workspace=''
+preflight_temp_root=''
 
 cleanup_preflight_workspace() {
   case "$preflight_workspace" in
     '') ;;
-    /private/tmp/ralph-provider-preflight.*)
+    "$preflight_temp_root"/ralph-provider-preflight.*)
       rm -rf -- "$preflight_workspace"
       ;;
     *)
@@ -138,7 +139,29 @@ EOF
 
 check_host
 if [ "${1:-}" = '--preflight' ]; then
-  preflight_workspace=$(mktemp -d /private/tmp/ralph-provider-preflight.XXXXXX) \
+  preflight_temp_root=$(python3 - "${TMPDIR:-/tmp}" <<'PY'
+import os
+import stat
+import sys
+
+root = os.path.realpath(sys.argv[1])
+if any(ord(character) < 32 or ord(character) == 127 for character in root):
+    raise SystemExit("codex container preflight: temporary root contains control characters")
+try:
+    metadata = os.stat(root)
+except OSError:
+    raise SystemExit("codex container preflight: temporary root unavailable")
+mode = stat.S_IMODE(metadata.st_mode)
+if not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit("codex container preflight: temporary root is not a directory")
+if metadata.st_uid not in {0, os.getuid()}:
+    raise SystemExit("codex container preflight: temporary root owner mismatch")
+if mode & 0o022 and not (metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX):
+    raise SystemExit("codex container preflight: temporary root is replaceable")
+print(root)
+PY
+  ) || die 'temporary root validation failed'
+  preflight_workspace=$(mktemp -d "$preflight_temp_root/ralph-provider-preflight.XXXXXX") \
     || die 'disposable preflight workspace unavailable'
   workspace_path="$preflight_workspace"
   check_transport_network

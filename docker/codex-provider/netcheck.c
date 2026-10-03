@@ -15,10 +15,7 @@ static void timeout_handler(int signal_number) {
 }
 
 static int denial_errno(int error_number) {
-    return error_number == EACCES || error_number == EPERM ||
-           error_number == ENETUNREACH || error_number == EHOSTUNREACH ||
-           error_number == ENETDOWN || error_number == EAFNOSUPPORT ||
-           error_number == EPROTONOSUPPORT;
+    return error_number == EACCES || error_number == EPERM;
 }
 
 static int prove_socket_denied(int family, int socket_type) {
