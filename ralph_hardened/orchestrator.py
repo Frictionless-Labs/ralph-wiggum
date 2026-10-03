@@ -221,6 +221,7 @@ def _valid_pass_evidence(
     prd_digest: object,
     config_digest: object,
     config: Any,
+    workspace: GitWorkspace,
 ) -> bool:
     if not isinstance(evidence, dict):
         return False
@@ -260,6 +261,26 @@ def _valid_pass_evidence(
         or not isinstance(checks, list)
         or len(checks) != len(story.required_checks)
     ):
+        return False
+    try:
+        normalized_metrics = normalize_provider_metrics(
+            ProviderResult(
+                ProviderOutcome.SUCCESS,
+                "",
+                "",
+                0,
+                0.0,
+                evidence["providerMetrics"],
+            )
+        )
+        if normalized_metrics != evidence["providerMetrics"]:
+            return False
+        if (
+            workspace.commit_tree(commit) != commit_tree
+            or workspace.commit_parent(commit) != evidence["baseSha"]
+        ):
+            return False
+    except (RalphError, ValueError):
         return False
     expected_checks = {check_id: config.checks[check_id] for check_id in story.required_checks}
     seen_checks: set[str] = set()
@@ -1005,6 +1026,7 @@ class Orchestrator:
                     prd_digest=store.state.get("prdDigest"),
                     config_digest=store.state.get("configDigest"),
                     config=config,
+                    workspace=workspace,
                 ):
                     reason = "FINAL_EVIDENCE_INVALID"
                     store.transition_story(

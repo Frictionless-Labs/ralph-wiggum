@@ -44,6 +44,23 @@ _SECRET_COMPONENT = re.compile(
 )
 
 
+def _portable_repository_path(value: str) -> bool:
+    if (
+        not value
+        or value.startswith("/")
+        or "\\" in value
+        or ":" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        return False
+    try:
+        value.encode("utf-8", "strict")
+    except UnicodeEncodeError:
+        return False
+    parts = value.split("/")
+    return all(part not in {"", ".", ".."} for part in parts)
+
+
 def _assert_safe_runtime_directory(label: str, path: Path) -> None:
     try:
         _assert_owned_state_directory(path)
@@ -494,7 +511,7 @@ class GitWorkspace:
                     continue
                 raise GitPolicyError(f"non-Git workspace artifact is prohibited: {relative}")
         for relative in manifest:
-            if relative.startswith("/") or ".." in Path(relative).parts or "\x00" in relative:
+            if not _portable_repository_path(relative):
                 raise GitPolicyError(f"unsafe changed path: {relative}")
             if ".git" in Path(relative).parts:
                 raise GitPolicyError(f"nested repository is prohibited: {relative}")
@@ -725,3 +742,6 @@ class GitWorkspace:
 
     def commit_tree(self, commit: str) -> str:
         return _run(("git", "rev-parse", f"{commit}^{{tree}}"), self.path).stdout.decode().strip()
+
+    def commit_parent(self, commit: str) -> str:
+        return _run(("git", "rev-parse", f"{commit}^"), self.path).stdout.decode().strip()
