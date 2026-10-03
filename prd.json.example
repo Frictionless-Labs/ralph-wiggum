@@ -23,7 +23,7 @@
       "references": [
         "SPEC.md"
       ],
-      "requiresBrowser": true
+      "requiresBrowser": false
     },
     {
       "id": "US-002",
@@ -45,7 +45,7 @@
       "dependsOn": [
         "US-001"
       ],
-      "requiresBrowser": false
+      "requiresBrowser": true
     }
   ]
 }
