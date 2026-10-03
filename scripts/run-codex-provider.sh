@@ -8,9 +8,24 @@ image_id=''
 container_home='/home/node'
 auth_path="${HOME:?HOME is required}/.codex/auth.json"
 container_name="ralph-provider-$$"
+workspace_path=$PWD
+preflight_workspace=''
+
+cleanup_preflight_workspace() {
+  case "$preflight_workspace" in
+    '') ;;
+    /private/tmp/ralph-provider-preflight.*)
+      rm -rf -- "$preflight_workspace"
+      ;;
+    *)
+      printf '%s\n' "codex container preflight: refused unsafe temporary cleanup path" >&2
+      ;;
+  esac
+}
 
 cleanup_container() {
   docker rm --force "$container_name" >/dev/null 2>&1 || :
+  cleanup_preflight_workspace
 }
 
 trap 'cleanup_container' EXIT HUP INT TERM
@@ -88,14 +103,14 @@ docker_base_inner() {
     --env SHELL=/bin/sh \
     --env TMPDIR=/tmp \
     --env USER=node \
-    --volume "$PWD:/workspace:rw" \
+    --volume "$workspace_path:/workspace:rw" \
     --volume "$auth_path:$container_home/.codex/auth.json:ro" \
     --workdir /workspace \
     "$@"
 }
 
 docker_base() {
-  if [ -f "$PWD/.git" ]; then
+  if [ -f "$workspace_path/.git" ]; then
     docker_base_inner --volume /dev/null:/workspace/.git:ro "$image_id" "$@"
   else
     docker_base_inner "$image_id" "$@"
@@ -123,6 +138,9 @@ EOF
 
 check_host
 if [ "${1:-}" = '--preflight' ]; then
+  preflight_workspace=$(mktemp -d /private/tmp/ralph-provider-preflight.XXXXXX) \
+    || die 'disposable preflight workspace unavailable'
+  workspace_path="$preflight_workspace"
   check_transport_network
   check_sandbox </dev/null
   exit 0
