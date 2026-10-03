@@ -1,47 +1,62 @@
 # Ralph Agent Instructions
 
-## Overview
+## Authority boundary
 
-Ralph is an autonomous AI agent loop that runs AI coding tools (Amp or Claude Code) repeatedly until all PRD items are complete. Each iteration is a fresh instance with clean context.
+Ralph preserves one fresh provider context per story, but the provider is an untrusted candidate producer. Only the orchestrator may validate inputs, create runtime worktrees, stage or commit files, write canonical state/evidence, mark a story PASS, or mark a run COMPLETE.
 
-## Commands
+Provider output, `passes` fields, completion tokens, and prose test claims have no state authority. Providers must not push, merge, deploy, change repository settings, or administer shared infrastructure.
 
-```bash
-# Run the flowchart dev server
-cd flowchart && npm run dev
+## Canonical commands
 
-# Build the flowchart
-cd flowchart && npm run build
+````bash
+./ralph.sh --repo /absolute/path/to/project --prd /absolute/path/to/prd.json --config /absolute/path/to/ralph.config.json --state-dir /absolute/path/to/state --tool codex --max-iterations 10
+docker build --pull --tag ralph-codex-provider:0.145.0-r1 --build-arg CODEX_VERSION=0.145.0 docker/codex-provider
+docker build --pull --tag ralph-validator:1.0.1 docker/validator
+./scripts/run-codex-provider.sh --preflight
+python3 -m unittest discover -s tests -v
+bash -n ralph.sh
+npm --prefix flowchart run lint
+VITE_BASE_PATH=/ralph-wiggum/ npm --prefix flowchart run build
+````
 
-# Run Ralph with Amp (default)
-./ralph.sh [max_iterations]
+Legacy positional iteration count remains supported: `./ralph.sh 10`. Verified provider names are containerized `codex` and fixture-only `mock`. Host-native Codex, Claude, and Amp fail closed until enforceable filesystem confinement and their installed CLI contracts can be verified. Docker, the pinned image, authentication-file metadata, and the nested filesystem/network/capability boundary are proved before any provider call.
 
-# Run Ralph with Claude Code
-./ralph.sh --tool claude [max_iterations]
-```
+## Required input contract
 
-## Key Files
+Every PRD story requires non-empty `allowedPaths` and `requiredChecks`. Optional `dependsOn` IDs must exist and be acyclic. `requiresBrowser: true` requires either a passing required check with `kind: browser` or exact-tree external evidence; absence blocks with `BLOCKED_VERIFIER`. Optional `references` select at most eight tracked regular blobs from the frozen source tree. References are repository-relative, unique, protected/secret-safe, individually limited to 32 KiB, and collectively limited to 64 KiB; the complete worker brief is limited to 128 KiB.
 
-- `ralph.sh` - The bash loop that spawns fresh AI instances (supports `--tool amp` or `--tool claude`)
-- `prompt.md` - Instructions given to each AMP instance
--  `CLAUDE.md` - Instructions given to each Claude Code instance
-- `prd.json.example` - Example PRD format
-- `flowchart/` - Interactive React Flow diagram explaining how Ralph works
+Named check commands live in the operator-reviewed `ralph.config.json`, are argv arrays, and require a pinned `containerImage`; they are never PRD-authored shell strings. The orchestrator freezes config and PRD objects before invoking a provider.
+Existing files matched by a check's `immutablePaths` cannot be worker-modified, and provider-created ignored files are rejected before validation.
 
-## Flowchart
+## P2 governance contracts
 
-The `flowchart/` directory contains an interactive visualization built with React Flow. It's designed for presentations - click through to reveal each step with animations.
+- Provider metrics are optional typed observations. Missing values stay absent; unknown, estimated, non-finite, or malformed values fail closed.
+- An unchanged successful attempt blocks immediately as `BLOCKED_NO_PROGRESS`; provider prose never resets progress. A rate-limited attempt may retry only if its complete workspace digest is unchanged. A timed-out attempt additionally requires provider-specific teardown proof; the production Codex adapter fails terminally because it cannot prove container removal. Residual edits are terminal and cannot contaminate a later attempt.
+- PASS evidence binds run/story/attempt, immutable input digests, source SHA, paths, named checks, provider metrics, evaluated tree, commit, and equality proof.
+- Outer schedulers may submit an approved data-only request, query status, receive redacted events, request approval, or cancel by run ID. They cannot write state, provide commands, mutate Git, mark PASS/COMPLETE, access credentials, or release software.
+- Numerical accuracy reports require an independently labeled sample count and raw TP/TN/FP/FN counts. Deterministic test success is implementation evidence, not a reliability percentage.
 
-To run locally:
-```bash
-cd flowchart
-npm install
-npm run dev
-```
+## Mutation contract
 
-## Patterns
+- The source checkout may be dirty; Ralph records its HEAD and creates a detached runtime worktree from that commit.
+- Provider changes are accepted only when every changed path matches the story allowlist and no path is protected, secret-like, traversing, or a symlink.
+- Checks run outside provider authority in a capability-dropped container against a read-only snapshot of the exact staged tree. Only reviewed `scratchMounts` may be writable. A check that fails, times out, or is unavailable blocks PASS.
+- The candidate digest must remain unchanged while checks run.
+- The evaluated staged tree must equal the resulting commit tree.
+- Runtime state lives outside the provider worktree and is written atomically with append-only events.
 
-- Each iteration spawns a fresh AI instance (Amp or Claude Code) with clean context
-- Memory persists via git history, `progress.txt`, and `prd.json`
-- Stories should be small enough to complete in one context window
-- Always update AGENTS.md with discovered patterns for future iterations
+## Validation ladder
+
+Run targeted Python tests while changing control-plane modules. Before any commit, run the full Python suite, shell syntax, dependency audit, flowchart lint, fork-base build, workflow policy checks, and a representative runtime fixture. Never weaken or skip a gate to obtain PASS.
+
+## Recovery
+
+Ralph preserves failed, blocked, and cancelled run directories and runtime worktrees. Inspect `run.json` and `events.jsonl`; fix the input or external dependency; then start a new run from the intended source HEAD. Never clean a user checkout as recovery.
+
+## Durable files
+
+- `SPEC.md` — normative contracts and traceability.
+- `docs/RUNBOOK.md` — operator procedure and failure recovery.
+- `schemas/prd.schema.json` — structural PRD contract.
+- `ralph.config.json` — named deterministic check registry.
+- `prompt.md` and `CLAUDE.md` — legacy provider boundary documentation only.

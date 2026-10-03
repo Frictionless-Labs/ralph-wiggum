@@ -1,7 +1,6 @@
 ---
 name: prd
 description: "Generate a Product Requirements Document (PRD) for a new feature. Use when planning a feature, starting a new project, or when asked to create a PRD. Triggers on: create a prd, write prd for, plan this feature, requirements for, spec out."
-user-invocable: true
 ---
 
 # PRD Generator
@@ -71,6 +70,11 @@ Each story needs:
 - **Title:** Short descriptive name
 - **Description:** "As a [user], I want [feature] so that [benefit]"
 - **Acceptance Criteria:** Verifiable checklist of what "done" means
+- **Likely change surface:** Narrow repository-relative files/directories, when repository evidence exists
+- **Required validation:** Observable check categories; the Ralph converter later maps these to configured check IDs
+- **Dependencies:** Earlier story IDs required before implementation
+- **Browser evidence:** Explicitly required for rendered UI or interaction acceptance
+- **Reference context:** Optional reviewed repository files needed for this story; never unbounded history or secrets
 
 Each story should be small enough to implement in one focused session.
 
@@ -89,6 +93,7 @@ Each story should be small enough to implement in one focused session.
 **Important:** 
 - Acceptance criteria must be verifiable, not vague. "Works correctly" is bad. "Button shows confirmation dialog before deleting" is good.
 - **For any story with UI changes:** Always include "Verify in browser using dev-browser skill" as acceptance criteria. This ensures visual verification of frontend work.
+- Do not make the implementation worker responsible for commits, canonical PASS state, release readiness, or completion tokens. Those are orchestrator decisions.
 
 ### 4. Functional Requirements
 Numbered list of specific functionalities:

@@ -35,19 +35,16 @@ const phaseColors: Record<Phase, { bg: string; border: string }> = {
 };
 
 const allSteps: { id: string; label: string; description: string; phase: Phase }[] = [
-  // Setup phase (vertical)
-  { id: '1', label: 'You write a PRD', description: 'Define what you want to build', phase: 'setup' },
-  { id: '2', label: 'Convert to prd.json', description: 'Break into small user stories', phase: 'setup' },
-  { id: '3', label: 'Run ralph.sh', description: 'Starts the autonomous loop', phase: 'setup' },
-  // Loop phase
-  { id: '4', label: 'AI picks a story', description: 'Finds next passes: false', phase: 'loop' },
-  { id: '5', label: 'Implements it', description: 'Writes code, runs tests', phase: 'loop' },
-  { id: '6', label: 'Commits changes', description: 'If tests pass', phase: 'loop' },
-  { id: '7', label: 'Updates prd.json', description: 'Sets passes: true', phase: 'loop' },
-  { id: '8', label: 'Logs to progress.txt', description: 'Saves learnings', phase: 'loop' },
-  { id: '9', label: 'More stories?', description: '', phase: 'decision' },
-  // Exit
-  { id: '10', label: 'Done!', description: 'All stories complete', phase: 'done' },
+  { id: '1', label: 'Validate inputs', description: 'PRD, config, scope, tools', phase: 'setup' },
+  { id: '2', label: 'Freeze run state', description: 'Immutable PRD snapshot + digest', phase: 'setup' },
+  { id: '3', label: 'Create worktree', description: 'Isolated from operator changes', phase: 'setup' },
+  { id: '4', label: 'Worker gets one story', description: 'Fresh, bounded implementation context', phase: 'loop' },
+  { id: '5', label: 'Enforce file scope', description: 'Reject secrets and disallowed paths', phase: 'loop' },
+  { id: '6', label: 'Run named checks', description: 'Independent deterministic validation', phase: 'loop' },
+  { id: '7', label: 'Bind exact Git tree', description: 'Evaluated tree must equal commit tree', phase: 'loop' },
+  { id: '8', label: 'Record verified PASS', description: 'Orchestrator writes evidence + state', phase: 'loop' },
+  { id: '9', label: 'More pending stories?', description: 'Budgets and dependencies still apply', phase: 'decision' },
+  { id: '10', label: 'Verified complete', description: 'All trusted story states are PASS', phase: 'done' },
 ];
 
 const notes = [
@@ -58,13 +55,9 @@ const notes = [
     color: { bg: '#f5f0ff', border: '#8b5cf6' },
     content: `{
   "id": "US-001",
-  "title": "Add priority field to database",
-  "acceptanceCriteria": [
-    "Add priority column to tasks table",
-    "Generate and run migration",
-    "Typecheck passes"
-  ],
-  "passes": false
+  "allowedPaths": ["src/**"],
+  "requiredChecks": ["test", "lint"],
+  "requiresBrowser": false
 }`,
   },
   {
@@ -72,9 +65,9 @@ const notes = [
     appearsWithStep: 8,
     position: { x: 480, y: 620 },
     color: { bg: '#fdf4f0', border: '#c97a50' },
-    content: `Also updates AGENTS.md with
-patterns discovered, so future
-iterations learn from this one.`,
+    content: `Worker prose is not evidence.
+Only the orchestrator can write PASS
+after checks and Git identity agree.`,
   },
 ];
 
@@ -225,25 +218,22 @@ function createNoteNode(note: typeof notes[0], visible: boolean, position?: { x:
   };
 }
 
+function getNodes(count: number, currentPositions: typeof positions): Node[] {
+  const stepNodes = allSteps.map((step, index) =>
+    createNode(step, index < count, currentPositions[step.id])
+  );
+  const noteNodes = notes.map(note =>
+    createNoteNode(note, count >= note.appearsWithStep, currentPositions[note.id])
+  );
+  return [...stepNodes, ...noteNodes];
+}
+
+const initialNodes = getNodes(1, positions);
+const initialEdges = edgeConnections.map((conn) => createEdge(conn, false));
+
 function App() {
   const [visibleCount, setVisibleCount] = useState(1);
   const nodePositions = useRef<{ [key: string]: { x: number; y: number } }>({ ...positions });
-
-  const getNodes = (count: number) => {
-    const stepNodes = allSteps.map((step, index) =>
-      createNode(step, index < count, nodePositions.current[step.id])
-    );
-    const noteNodes = notes.map(note => {
-      const noteVisible = count >= note.appearsWithStep;
-      return createNoteNode(note, noteVisible, nodePositions.current[note.id]);
-    });
-    return [...stepNodes, ...noteNodes];
-  };
-
-  const initialNodes = getNodes(1);
-  const initialEdges = edgeConnections.map((conn, index) =>
-    createEdge(conn, index < 0)
-  );
 
   const [nodes, setNodes] = useNodesState(initialNodes);
   const [edges, setEdges] = useEdgesState(initialEdges);
@@ -292,7 +282,7 @@ function App() {
       const newCount = visibleCount + 1;
       setVisibleCount(newCount);
 
-      setNodes(getNodes(newCount));
+      setNodes(getNodes(newCount, nodePositions.current));
       setEdges(
         edgeConnections.map((conn) =>
           createEdge(conn, getEdgeVisibility(conn, newCount))
@@ -306,7 +296,7 @@ function App() {
       const newCount = visibleCount - 1;
       setVisibleCount(newCount);
 
-      setNodes(getNodes(newCount));
+      setNodes(getNodes(newCount, nodePositions.current));
       setEdges(
         edgeConnections.map((conn) =>
           createEdge(conn, getEdgeVisibility(conn, newCount))
@@ -318,15 +308,15 @@ function App() {
   const handleReset = useCallback(() => {
     setVisibleCount(1);
     nodePositions.current = { ...positions };
-    setNodes(getNodes(1));
-    setEdges(edgeConnections.map((conn, index) => createEdge(conn, index < 0)));
+    setNodes(getNodes(1, nodePositions.current));
+    setEdges(edgeConnections.map((conn) => createEdge(conn, false)));
   }, [setNodes, setEdges]);
 
   return (
     <div className="app-container">
       <div className="header">
-        <h1>How Ralph Works</h1>
-        <p>Autonomous AI agent loop for completing PRDs</p>
+        <h1>How Hardened Ralph Works</h1>
+        <p>Fresh-context implementation behind trusted state, validation, and Git gates</p>
       </div>
       <div className="flow-container">
         <ReactFlow
