@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .errors import GitPolicyError, PreflightError
+from .errors import GitPolicyError, PreflightError, StateError
 from .limits import WorkspaceBaseline, capture_workspace_baseline, workspace_limit_violation
 from .provider import build_safe_env
+from .state import _assert_owned_state_directory
 
 
 _SECRET_NAMES = {
@@ -41,6 +42,13 @@ _SECRET_COMPONENT = re.compile(
     r"(?:^|[._-])(?:api[_-]?key|auth|credential|credentials|secret|secrets|token)"
     r"(?:[._-]|$)"
 )
+
+
+def _assert_safe_runtime_directory(label: str, path: Path) -> None:
+    try:
+        _assert_owned_state_directory(path)
+    except StateError as exc:
+        raise PreflightError(f"unsafe {label}: {path}") from exc
 
 
 def _digest_field(digest: "hashlib._Hash", value: bytes) -> None:
@@ -291,6 +299,8 @@ class GitWorkspace:
             state_root.mkdir(parents=True, mode=0o700)
         if state_root.is_symlink() or not state_root.is_dir():
             raise PreflightError(f"state root must be a real directory: {state_root}")
+        state_root = state_root.resolve()
+        _assert_safe_runtime_directory("state root", state_root)
         worktrees_root = state_root / "worktrees"
         if os.path.lexists(worktrees_root):
             if worktrees_root.is_symlink() or not worktrees_root.is_dir():
@@ -299,6 +309,7 @@ class GitWorkspace:
                 )
         else:
             worktrees_root.mkdir(mode=0o700)
+        _assert_safe_runtime_directory("worktrees root", worktrees_root)
         if worktrees_root.resolve().parent != state_root.resolve():
             raise PreflightError("worktrees root escapes the state directory")
         worktree_path = worktrees_root / run_id
@@ -319,8 +330,12 @@ class GitWorkspace:
             source,
         )
         try:
+            _assert_safe_runtime_directory("runtime worktree", worktree_path)
             _run(("git", "read-tree", "HEAD"), worktree_path)
             materialize_index(worktree_path, worktree_path)
+        except PreflightError:
+            _run(("git", "worktree", "remove", "--force", str(worktree_path)), source)
+            raise
         except (OSError, ValueError) as exc:
             _run(("git", "worktree", "remove", "--force", str(worktree_path)), source)
             raise GitPolicyError(f"unable to materialize runtime worktree: {exc}") from exc
@@ -341,6 +356,9 @@ class GitWorkspace:
     ) -> "GitWorkspace":
         source = source_repo.expanduser().resolve()
         state_root = Path(os.path.abspath(state_dir.expanduser()))
+        if state_root.is_symlink():
+            raise PreflightError(f"state root must be a real directory: {state_root}")
+        state_root = state_root.resolve()
         worktrees_root = state_root / "worktrees"
         worktree_path = worktrees_root / run_id
         for label, path in (
@@ -350,6 +368,7 @@ class GitWorkspace:
         ):
             if path.is_symlink() or not path.is_dir():
                 raise PreflightError(f"{label} must be a real directory: {path}")
+            _assert_safe_runtime_directory(label, path)
         if worktree_path.resolve().parent != worktrees_root.resolve():
             raise PreflightError("runtime worktree escapes the worktrees root")
         actual_root = _run(("git", "rev-parse", "--show-toplevel"), worktree_path).stdout

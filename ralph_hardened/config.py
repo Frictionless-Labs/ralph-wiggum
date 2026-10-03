@@ -15,6 +15,7 @@ _SENSITIVE_ENVIRONMENT_KEY = re.compile(
     r"TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|API_?KEY", re.IGNORECASE
 )
 _CONTAINER_IMAGE = re.compile(r"^[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[0-9a-f]{64})$")
+_CONFIG_FIELDS = frozenset({"version", "checks", "protectedPaths"})
 _CHECK_FIELDS = frozenset(
     {
         "argv",
@@ -64,6 +65,12 @@ def _read_object(path: Path, content: bytes | None = None) -> dict[str, Any]:
 def load_config(path: Path, content: bytes | None = None) -> RalphConfig:
     resolved = path.expanduser().resolve()
     raw = _read_object(resolved, content)
+    unsupported_root_fields = sorted(set(raw) - _CONFIG_FIELDS)
+    if unsupported_root_fields:
+        raise PreflightError(
+            "configuration has unsupported root fields: "
+            + ", ".join(unsupported_root_fields)
+        )
     if raw.get("version") != 1:
         raise PreflightError("configuration version must be 1")
     checks_raw = raw.get("checks")
